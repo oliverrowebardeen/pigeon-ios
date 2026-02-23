@@ -5,7 +5,7 @@ import Observation
 @Observable
 @MainActor
 final class AppCoordinator {
-    let identity: PigeonIdentity
+    var identity: PigeonIdentity
     let store: PigeonStore
     let bleManager: BLEManager
     let crypto: CryptoManager
@@ -14,9 +14,11 @@ final class AppCoordinator {
     var conversations: [Conversation] = []
     var nearbyPeers: [Peer] = []
     var bleState: BLEManager.State = .idle
+    private(set) var messageChangeToken = 0
 
     init(store: PigeonStore) throws {
-        self.identity = try PigeonIdentity.loadOrCreate()
+        let identity = try PigeonIdentity.loadOrCreate()
+        self.identity = identity
         self.store = store
         self.crypto = CryptoManager()
         self.router = MeshRouter()
@@ -54,32 +56,41 @@ final class AppCoordinator {
         )
 
         try store.saveMessage(message)
+        markMessagesChanged()
 
-        let envelope = try crypto.encrypt(
-            plaintext: text,
-            senderPrivateKey: identity.privateKey,
-            recipientPublicKeyData: conversation.peerPublicKey,
-            messageID: message.id
-        )
+        do {
+            let envelope = try crypto.encrypt(
+                plaintext: text,
+                senderPrivateKey: identity.privateKey,
+                recipientPublicKeyData: conversation.peerPublicKey,
+                messageID: message.id
+            )
 
-        await router.enqueueOutbound(envelope)
-        bleManager.sendMessage(envelope, to: conversation.peerPublicKey)
+            await router.enqueueOutbound(envelope)
+            bleManager.sendMessage(envelope, to: conversation.peerPublicKey)
 
-        try store.updateMessageStatus(id: message.id, status: .sent)
-        try store.updateConversationPreview(id: conversation.id, preview: text, timestamp: message.timestamp)
+            try store.updateMessageStatus(id: message.id, status: .sent)
+            try store.updateConversationPreview(id: conversation.id, preview: text, timestamp: message.timestamp)
+            markMessagesChanged()
 
-        await loadConversations()
+            await loadConversations()
 
-        return Message(
-            id: message.id,
-            conversationID: message.conversationID,
-            senderPublicKey: message.senderPublicKey,
-            recipientPublicKey: message.recipientPublicKey,
-            plaintext: message.plaintext,
-            timestamp: message.timestamp,
-            status: .sent,
-            isIncoming: false
-        )
+            return Message(
+                id: message.id,
+                conversationID: message.conversationID,
+                senderPublicKey: message.senderPublicKey,
+                recipientPublicKey: message.recipientPublicKey,
+                plaintext: message.plaintext,
+                timestamp: message.timestamp,
+                status: .sent,
+                isIncoming: false
+            )
+        } catch {
+            try? store.updateMessageStatus(id: message.id, status: .failed)
+            markMessagesChanged()
+            await loadConversations()
+            throw error
+        }
     }
 
     func startConversation(with peer: Peer) throws -> Conversation {
@@ -100,6 +111,15 @@ final class AppCoordinator {
     func clearUnread(conversationID: UUID) throws {
         try store.clearUnreadCount(conversationID: conversationID)
         Task { await loadConversations() }
+    }
+
+    func updateDisplayName(_ newValue: String?) {
+        identity.setDisplayName(newValue)
+        bleManager.updateDisplayName(identity.displayName)
+    }
+
+    private func markMessagesChanged() {
+        messageChangeToken &+= 1
     }
 }
 
@@ -124,6 +144,7 @@ extension AppCoordinator: BLEManagerDelegate {
                 // Persistence failed
             }
 
+            markMessagesChanged()
             await loadConversations()
 
             let senderName = nearbyPeers.first(where: { $0.publicKey == message.senderPublicKey })?.displayName
@@ -162,12 +183,14 @@ extension AppCoordinator: BLEManagerDelegate {
     nonisolated func bleManager(_ manager: BLEManager, didDeliverMessage messageID: UUID) {
         Task { @MainActor in
             try? store.updateMessageStatus(id: messageID, status: .delivered)
+            markMessagesChanged()
         }
     }
 
     nonisolated func bleManager(_ manager: BLEManager, didFailMessage messageID: UUID) {
         Task { @MainActor in
             try? store.updateMessageStatus(id: messageID, status: .failed)
+            markMessagesChanged()
         }
     }
 

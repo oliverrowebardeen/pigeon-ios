@@ -37,7 +37,7 @@ extension BLEManager: CBPeripheralManagerDelegate {
             let payload = PeerIdentityPayload(
                 publicKey: identity.publicKey.rawRepresentation,
                 pigeonID: identity.pigeonID,
-                displayName: identity.displayName
+                displayName: currentDisplayName
             )
 
             do {

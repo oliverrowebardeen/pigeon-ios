@@ -97,10 +97,17 @@ struct IdentityView: View {
                 .padding(12)
                 .background(PigeonTheme.surface, in: RoundedRectangle(cornerRadius: 10))
                 .foregroundColor(PigeonTheme.textPrimary)
+                .submitLabel(.done)
                 .onSubmit {
-                    var mutableIdentity = coordinator.identity
-                    mutableIdentity.setDisplayName(displayName.isEmpty ? nil : displayName)
+                    coordinator.updateDisplayName(normalizedDisplayName)
                 }
+
+            Button("Save Display Name") {
+                coordinator.updateDisplayName(normalizedDisplayName)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(PigeonTheme.accent)
+            .disabled(normalizedDisplayName == coordinator.identity.displayName)
         }
     }
 
@@ -122,5 +129,10 @@ struct IdentityView: View {
             .foregroundColor(PigeonTheme.textTertiary)
             .multilineTextAlignment(.center)
             .padding(.top, 8)
+    }
+
+    private var normalizedDisplayName: String? {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

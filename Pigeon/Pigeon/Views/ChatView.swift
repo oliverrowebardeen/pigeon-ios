@@ -23,6 +23,9 @@ struct ChatView: View {
             loadMessages()
             try? coordinator.clearUnread(conversationID: conversation.id)
         }
+        .onChange(of: coordinator.messageChangeToken) {
+            loadMessages()
+        }
     }
 
     private var messagesList: some View {
@@ -88,19 +91,10 @@ struct ChatView: View {
 
         Task {
             do {
-                let sentMessage = try await coordinator.sendMessage(text: text, in: conversation)
-                messages.append(sentMessage)
+                _ = try await coordinator.sendMessage(text: text, in: conversation)
+                loadMessages()
             } catch {
-                // Add failed message to list
-                let failedMessage = Message(
-                    conversationID: conversation.id,
-                    senderPublicKey: coordinator.identity.publicKey.rawRepresentation,
-                    recipientPublicKey: conversation.peerPublicKey,
-                    plaintext: text,
-                    status: .failed,
-                    isIncoming: false
-                )
-                messages.append(failedMessage)
+                loadMessages()
             }
             isSending = false
         }

@@ -64,6 +64,7 @@ final class BLEManager: NSObject {
     // MARK: - Nearby peers (live, in-memory)
 
     var nearbyPeers: [Data: Peer] = [:]
+    var currentDisplayName: String?
 
     // MARK: - Lifecycle
 
@@ -72,6 +73,7 @@ final class BLEManager: NSObject {
         self.crypto = crypto
         self.router = router
         self.store = store
+        self.currentDisplayName = identity.displayName
         super.init()
     }
 
@@ -154,8 +156,28 @@ final class BLEManager: NSObject {
 
         peripheralManager.startAdvertising([
             CBAdvertisementDataServiceUUIDsKey: [BLEConstants.serviceUUID],
-            CBAdvertisementDataLocalNameKey: identity.displayName ?? "Pigeon"
+            CBAdvertisementDataLocalNameKey: currentDisplayName ?? "Pigeon"
         ])
+    }
+
+    func updateDisplayName(_ newValue: String?) {
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+            currentDisplayName = newValue
+
+            guard let peripheralManager, peripheralManager.state == .poweredOn else {
+                return
+            }
+
+            if peripheralManager.isAdvertising {
+                peripheralManager.stopAdvertising()
+            }
+
+            peripheralManager.startAdvertising([
+                CBAdvertisementDataServiceUUIDsKey: [BLEConstants.serviceUUID],
+                CBAdvertisementDataLocalNameKey: currentDisplayName ?? "Pigeon"
+            ])
+        }
     }
 
     private func setupService() {
