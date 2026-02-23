@@ -442,7 +442,7 @@ final class BLEManager: NSObject {
 
     func sendPendingMessages(toPeerWithPublicKey peerPublicKey: Data, peripheralID: UUID) {
         Task {
-            let pending = await router.dequeueOutbound(for: peerPublicKey)
+            let pending = await router.outboundMessages(for: peerPublicKey)
             let forwardable = await router.forwardableMessages()
 
             bleQueue.async { [weak self] in

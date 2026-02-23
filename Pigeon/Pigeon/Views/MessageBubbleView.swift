@@ -28,6 +28,13 @@ struct MessageBubbleView: View {
                     }
                 }
                 .padding(.horizontal, 4)
+
+                if !message.isIncoming, message.status == .failed {
+                    Text("Failed to send")
+                        .font(PigeonTheme.captionFont)
+                        .foregroundColor(PigeonTheme.error)
+                        .padding(.horizontal, 4)
+                }
             }
 
             if message.isIncoming { Spacer(minLength: 60) }

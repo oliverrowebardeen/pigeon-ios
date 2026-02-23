@@ -26,7 +26,10 @@ struct ConversationListView: View {
         List {
             ForEach(coordinator.conversations) { conversation in
                 NavigationLink(value: conversation) {
-                    ConversationRowView(conversation: conversation)
+                    ConversationRowView(
+                        conversation: conversation,
+                        isPeerNearby: coordinator.isPeerNearby(publicKey: conversation.peerPublicKey)
+                    )
                 }
                 .listRowBackground(PigeonTheme.background)
             }

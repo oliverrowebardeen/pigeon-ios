@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConversationRowView: View {
     let conversation: Conversation
+    let isPeerNearby: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -34,6 +35,16 @@ struct ConversationRowView: View {
                         .font(PigeonTheme.captionFont)
                         .foregroundColor(PigeonTheme.textTertiary)
                 }
+            }
+
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
+                    .frame(width: 6, height: 6)
+
+                Text(isPeerNearby ? "Nearby" : "Out of range")
+                    .font(PigeonTheme.captionFont)
+                    .foregroundColor(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
             }
 
             HStack {

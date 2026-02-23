@@ -11,6 +11,7 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            connectionStatusBanner
             messagesList
             Divider().overlay(PigeonTheme.divider)
             messageInputBar
@@ -50,6 +51,23 @@ struct ChatView: View {
         }
     }
 
+    private var connectionStatusBanner: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
+                .frame(width: 8, height: 8)
+
+            Text(isPeerNearby ? "Peer nearby" : "Peer out of range. Messages will queue until detected.")
+                .font(PigeonTheme.captionFont)
+                .foregroundColor(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(PigeonTheme.surface)
+    }
+
     private var messageInputBar: some View {
         HStack(spacing: 10) {
             TextField("Message", text: $draftText, axis: .vertical)
@@ -76,6 +94,10 @@ struct ChatView: View {
 
     private var canSend: Bool {
         !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+    }
+
+    private var isPeerNearby: Bool {
+        coordinator.isPeerNearby(publicKey: conversation.peerPublicKey)
     }
 
     private func loadMessages() {

@@ -40,6 +40,12 @@ final class PigeonStore {
         try modelContext.save()
     }
 
+    func fetchMessage(id: UUID) throws -> Message? {
+        let predicate = #Predicate<StoredMessage> { $0.id == id }
+        let descriptor = FetchDescriptor<StoredMessage>(predicate: predicate)
+        return try modelContext.fetch(descriptor).first?.toDTO()
+    }
+
     // MARK: - Conversations
 
     func saveConversation(_ conversation: Conversation) throws {

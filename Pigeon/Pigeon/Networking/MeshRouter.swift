@@ -17,7 +17,12 @@ actor MeshRouter {
     }
 
     func enqueueOutbound(_ envelope: MessageEnvelope) {
-        outboundQueue[envelope.recipientPublicKey, default: []].append(envelope)
+        var queue = outboundQueue[envelope.recipientPublicKey, default: []]
+        guard !queue.contains(where: { $0.id == envelope.id }) else {
+            return
+        }
+        queue.append(envelope)
+        outboundQueue[envelope.recipientPublicKey] = queue
     }
 
     func dequeueOutbound(for recipientPublicKey: Data, limit: Int = .max) -> [MessageEnvelope] {
@@ -36,6 +41,17 @@ actor MeshRouter {
         }
 
         return drained
+    }
+
+    func outboundMessages(for recipientPublicKey: Data, limit: Int = .max) -> [MessageEnvelope] {
+        purgeExpired(now: Date())
+
+        guard let messages = outboundQueue[recipientPublicKey], !messages.isEmpty else {
+            return []
+        }
+
+        let count = min(limit, messages.count)
+        return Array(messages.prefix(count))
     }
 
     @discardableResult

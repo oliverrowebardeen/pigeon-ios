@@ -15,6 +15,8 @@ final class AppCoordinator {
     var nearbyPeers: [Peer] = []
     var bleState: BLEManager.State = .idle
     private(set) var messageChangeToken = 0
+    private let deliveryFailureTimeoutNanoseconds: UInt64 = 30_000_000_000
+    private var deliveryTimeoutTasks: [UUID: Task<Void, Never>] = [:]
 
     init(store: PigeonStore) throws {
         let identity = try PigeonIdentity.loadOrCreate()
@@ -66,11 +68,11 @@ final class AppCoordinator {
                 messageID: message.id
             )
 
-            await router.enqueueOutbound(envelope)
             bleManager.sendMessage(envelope, to: conversation.peerPublicKey)
 
             try store.updateMessageStatus(id: message.id, status: .sent)
             try store.updateConversationPreview(id: conversation.id, preview: text, timestamp: message.timestamp)
+            scheduleDeliveryTimeout(for: message.id)
             markMessagesChanged()
 
             await loadConversations()
@@ -87,6 +89,7 @@ final class AppCoordinator {
             )
         } catch {
             try? store.updateMessageStatus(id: message.id, status: .failed)
+            cancelDeliveryTimeout(for: message.id)
             markMessagesChanged()
             await loadConversations()
             throw error
@@ -113,9 +116,48 @@ final class AppCoordinator {
         Task { await loadConversations() }
     }
 
+    func isPeerNearby(publicKey: Data) -> Bool {
+        nearbyPeers.contains(where: { $0.publicKey == publicKey })
+    }
+
     func updateDisplayName(_ newValue: String?) {
         identity.setDisplayName(newValue)
         bleManager.updateDisplayName(identity.displayName)
+    }
+
+    private func scheduleDeliveryTimeout(for messageID: UUID) {
+        cancelDeliveryTimeout(for: messageID)
+
+        deliveryTimeoutTasks[messageID] = Task { [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: self?.deliveryFailureTimeoutNanoseconds ?? 30_000_000_000)
+            } catch {
+                return
+            }
+
+            await self?.handleDeliveryTimeout(for: messageID)
+        }
+    }
+
+    private func cancelDeliveryTimeout(for messageID: UUID) {
+        deliveryTimeoutTasks[messageID]?.cancel()
+        deliveryTimeoutTasks.removeValue(forKey: messageID)
+    }
+
+    private func handleDeliveryTimeout(for messageID: UUID) async {
+        deliveryTimeoutTasks.removeValue(forKey: messageID)
+
+        guard let message = (try? store.fetchMessage(id: messageID)) ?? nil else {
+            return
+        }
+
+        guard message.status == .sending || message.status == .sent else {
+            return
+        }
+
+        try? store.updateMessageStatus(id: messageID, status: .failed)
+        markMessagesChanged()
+        await loadConversations()
     }
 
     private func markMessagesChanged() {
@@ -182,6 +224,7 @@ extension AppCoordinator: BLEManagerDelegate {
 
     nonisolated func bleManager(_ manager: BLEManager, didDeliverMessage messageID: UUID) {
         Task { @MainActor in
+            cancelDeliveryTimeout(for: messageID)
             try? store.updateMessageStatus(id: messageID, status: .delivered)
             markMessagesChanged()
         }
@@ -189,6 +232,7 @@ extension AppCoordinator: BLEManagerDelegate {
 
     nonisolated func bleManager(_ manager: BLEManager, didFailMessage messageID: UUID) {
         Task { @MainActor in
+            cancelDeliveryTimeout(for: messageID)
             try? store.updateMessageStatus(id: messageID, status: .failed)
             markMessagesChanged()
         }
