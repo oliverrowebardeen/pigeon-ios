@@ -145,8 +145,8 @@ final class PigeonStore {
     // MARK: - Peers
 
     func savePeer(_ peer: Peer) throws {
-        let peerID = peer.pigeonID
-        let predicate = #Predicate<StoredPeer> { $0.pigeonID == peerID }
+        let peerPublicKey = peer.publicKey
+        let predicate = #Predicate<StoredPeer> { $0.publicKey == peerPublicKey }
         let descriptor = FetchDescriptor<StoredPeer>(predicate: predicate)
 
         if let existing = try modelContext.fetch(descriptor).first {

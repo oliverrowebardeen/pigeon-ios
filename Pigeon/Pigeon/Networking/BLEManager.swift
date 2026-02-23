@@ -6,7 +6,7 @@ protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didReceiveMessage message: Message, inConversation conversationID: UUID)
     func bleManager(_ manager: BLEManager, didDiscoverPeer peer: Peer)
     func bleManager(_ manager: BLEManager, didUpdatePeer peer: Peer)
-    func bleManager(_ manager: BLEManager, didLosePeer pigeonID: String)
+    func bleManager(_ manager: BLEManager, didLosePeer publicKey: Data)
     func bleManager(_ manager: BLEManager, didDeliverMessage messageID: UUID)
     func bleManager(_ manager: BLEManager, didFailMessage messageID: UUID)
     func bleManagerDidUpdateState(_ manager: BLEManager)
@@ -312,16 +312,11 @@ final class BLEManager: NSObject {
                 recipientPrivateKey: identity.privateKey
             )
 
-            let senderPigeonID = PigeonIdentity.makePigeonID(
-                fromPublicKeyData: envelope.senderPublicKey
-            )
-
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
 
                 let peer = Peer(
                     publicKey: envelope.senderPublicKey,
-                    pigeonID: senderPigeonID,
                     displayName: nearbyPeers[envelope.senderPublicKey]?.displayName,
                     firstSeen: Date(),
                     lastSeen: Date(),

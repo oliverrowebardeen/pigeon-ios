@@ -66,7 +66,7 @@ struct ConversationRowView: View {
     }
 
     private var displayName: String {
-        conversation.peerDisplayName ?? conversation.peerPigeonID
+        conversation.peerDisplayName ?? conversation.derivedPeerPigeonID
     }
 
     private var avatarLetter: String {

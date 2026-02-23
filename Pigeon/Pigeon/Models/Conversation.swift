@@ -26,4 +26,8 @@ nonisolated struct Conversation: Identifiable, Hashable, Sendable {
         self.lastMessagePreview = lastMessagePreview
         self.unreadCount = unreadCount
     }
+
+    var derivedPeerPigeonID: String {
+        PigeonIdentity.makePigeonID(fromPublicKeyData: peerPublicKey)
+    }
 }

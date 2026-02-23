@@ -8,6 +8,7 @@ struct ChatView: View {
     @State private var messages: [Message] = []
     @State private var draftText = ""
     @State private var isSending = false
+    @State private var pendingWarning: PeerKeyChangeWarning?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,7 +18,7 @@ struct ChatView: View {
             messageInputBar
         }
         .background(PigeonTheme.background)
-        .navigationTitle(conversation.peerDisplayName ?? conversation.peerPigeonID)
+        .navigationTitle(conversation.peerDisplayName ?? conversation.derivedPeerPigeonID)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
         .task {
@@ -26,6 +27,24 @@ struct ChatView: View {
         }
         .onChange(of: coordinator.messageChangeToken) {
             loadMessages()
+        }
+        .alert(
+            "Security Warning",
+            isPresented: warningBinding,
+            presenting: pendingWarning
+        ) { warning in
+            Button("Cancel", role: .cancel) {
+                pendingWarning = nil
+            }
+            Button("Trust New Key", role: .destructive) {
+                coordinator.confirmPeerKeyChange(for: warning.peerPublicKey)
+                pendingWarning = nil
+                sendMessage()
+            }
+        } message: { warning in
+            Text(
+                "\(warning.displayName) was previously trusted as \(warning.previousPigeonID), but is now advertising \(warning.currentPigeonID). Sending is paused until you confirm this key change."
+            )
         }
     }
 
@@ -107,6 +126,12 @@ struct ChatView: View {
     private func sendMessage() {
         let text = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        guard pendingWarning == nil else { return }
+
+        if let warning = coordinator.peerKeyChangeWarning(for: conversation.peerPublicKey) {
+            pendingWarning = warning
+            return
+        }
 
         draftText = ""
         isSending = true
@@ -120,5 +145,16 @@ struct ChatView: View {
             }
             isSending = false
         }
+    }
+
+    private var warningBinding: Binding<Bool> {
+        Binding(
+            get: { pendingWarning != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingWarning = nil
+                }
+            }
+        )
     }
 }

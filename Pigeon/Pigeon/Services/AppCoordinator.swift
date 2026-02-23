@@ -2,6 +2,19 @@ import CryptoKit
 import Foundation
 import Observation
 
+nonisolated enum AppCoordinatorError: Error {
+    case untrustedPeerKey
+}
+
+nonisolated struct PeerKeyChangeWarning: Identifiable, Sendable {
+    let id: String
+    let peerPublicKey: Data
+    let displayName: String
+    let previousPigeonID: String
+    let currentPigeonID: String
+    let trustAlias: String
+}
+
 @Observable
 @MainActor
 final class AppCoordinator {
@@ -10,6 +23,7 @@ final class AppCoordinator {
     let bleManager: BLEManager
     let crypto: CryptoManager
     let router: MeshRouter
+    private let keyStore: KeyStore
 
     var conversations: [Conversation] = []
     var nearbyPeers: [Peer] = []
@@ -20,6 +34,7 @@ final class AppCoordinator {
     private var didStartBLE = false
     private var didRestoreOutboundQueue = false
     private var didRunInitialStartup = false
+    private var peerKeyChangeWarnings: [Data: PeerKeyChangeWarning] = [:]
 
     init(store: PigeonStore) throws {
         let identity = try PigeonIdentity.loadOrCreate()
@@ -27,6 +42,7 @@ final class AppCoordinator {
         self.store = store
         self.crypto = CryptoManager()
         self.router = MeshRouter()
+        self.keyStore = .shared
         self.bleManager = BLEManager(
             identity: identity,
             crypto: crypto,
@@ -57,6 +73,10 @@ final class AppCoordinator {
     }
 
     func sendMessage(text: String, in conversation: Conversation) async throws -> Message {
+        guard peerKeyChangeWarnings[conversation.peerPublicKey] == nil else {
+            throw AppCoordinatorError.untrustedPeerKey
+        }
+
         let message = Message(
             conversationID: conversation.id,
             senderPublicKey: identity.publicKey.rawRepresentation,
@@ -111,6 +131,10 @@ final class AppCoordinator {
     }
 
     func startConversation(with peer: Peer) throws -> Conversation {
+        guard peerKeyChangeWarnings[peer.publicKey] == nil else {
+            throw AppCoordinatorError.untrustedPeerKey
+        }
+
         let conversation = try store.getOrCreateConversation(for: peer)
         Task { await loadConversations() }
         return conversation
@@ -137,6 +161,25 @@ final class AppCoordinator {
     func updateDisplayName(_ newValue: String?) {
         identity.setDisplayName(newValue)
         bleManager.updateDisplayName(identity.displayName)
+    }
+
+    func peerKeyChangeWarning(for peer: Peer) -> PeerKeyChangeWarning? {
+        peerKeyChangeWarnings[peer.publicKey]
+    }
+
+    func peerKeyChangeWarning(for publicKey: Data) -> PeerKeyChangeWarning? {
+        peerKeyChangeWarnings[publicKey]
+    }
+
+    func confirmPeerKeyChange(for publicKey: Data) {
+        guard let warning = peerKeyChangeWarnings[publicKey] else { return }
+
+        do {
+            try keyStore.saveKnownPeerPublicKey(publicKey, pigeonID: warning.trustAlias)
+            peerKeyChangeWarnings = peerKeyChangeWarnings.filter { $0.value.trustAlias != warning.trustAlias }
+        } catch {
+            // Keep warning active if trust update cannot be persisted.
+        }
     }
 
     func applicationDidBecomeActive() {
@@ -188,6 +231,60 @@ final class AppCoordinator {
         messageChangeToken &+= 1
     }
 
+    private func updateTrustState(for peer: Peer) {
+        if peerKeyChangeWarnings[peer.publicKey] != nil {
+            return
+        }
+
+        guard let trustAlias = makeTrustAlias(for: peer.displayName) else { return }
+
+        do {
+            if let pinnedKey = try keyStore.loadKnownPeerPublicKey(pigeonID: trustAlias) {
+                if pinnedKey == peer.publicKey {
+                    peerKeyChangeWarnings.removeValue(forKey: peer.publicKey)
+                    return
+                }
+
+                let warning = PeerKeyChangeWarning(
+                    id: peer.publicKey.hexEncodedString,
+                    peerPublicKey: peer.publicKey,
+                    displayName: peer.displayName ?? peer.pigeonID,
+                    previousPigeonID: PigeonIdentity.makePigeonID(fromPublicKeyData: pinnedKey),
+                    currentPigeonID: peer.pigeonID,
+                    trustAlias: trustAlias
+                )
+                peerKeyChangeWarnings[peer.publicKey] = warning
+                return
+            }
+
+            try keyStore.saveKnownPeerPublicKey(peer.publicKey, pigeonID: trustAlias)
+            peerKeyChangeWarnings.removeValue(forKey: peer.publicKey)
+        } catch {
+            let warning = PeerKeyChangeWarning(
+                id: peer.publicKey.hexEncodedString,
+                peerPublicKey: peer.publicKey,
+                displayName: peer.displayName ?? peer.pigeonID,
+                previousPigeonID: "unknown",
+                currentPigeonID: peer.pigeonID,
+                trustAlias: trustAlias
+            )
+            peerKeyChangeWarnings[peer.publicKey] = warning
+        }
+    }
+
+    private func makeTrustAlias(for displayName: String?) -> String? {
+        guard let displayName else { return nil }
+        let normalized = displayName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        guard !normalized.isEmpty else { return nil }
+
+        let digest = SHA256.hash(data: Data(normalized.utf8))
+        let hash = digest.map { String(format: "%02x", $0) }.joined()
+        return "name.\(hash)"
+    }
+
     private func activateBLEIfNeeded() {
         guard !didStartBLE else { return }
         didStartBLE = true
@@ -203,6 +300,10 @@ final class AppCoordinator {
         guard !pendingMessages.isEmpty else { return }
 
         for message in pendingMessages {
+            if peerKeyChangeWarnings[message.recipientPublicKey] != nil {
+                continue
+            }
+
             do {
                 let envelope = try crypto.encrypt(
                     plaintext: message.plaintext,
@@ -237,6 +338,10 @@ extension AppCoordinator: BLEManagerDelegate {
         inConversation conversationID: UUID
     ) {
         Task { @MainActor in
+            if peerKeyChangeWarnings[message.senderPublicKey] != nil {
+                return
+            }
+
             do {
                 try store.saveMessage(message)
                 try store.updateConversationPreview(
@@ -265,7 +370,8 @@ extension AppCoordinator: BLEManagerDelegate {
 
     nonisolated func bleManager(_ manager: BLEManager, didDiscoverPeer peer: Peer) {
         Task { @MainActor in
-            if !nearbyPeers.contains(where: { $0.pigeonID == peer.pigeonID }) {
+            updateTrustState(for: peer)
+            if !nearbyPeers.contains(where: { $0.publicKey == peer.publicKey }) {
                 nearbyPeers.append(peer)
             }
         }
@@ -273,15 +379,18 @@ extension AppCoordinator: BLEManagerDelegate {
 
     nonisolated func bleManager(_ manager: BLEManager, didUpdatePeer peer: Peer) {
         Task { @MainActor in
-            if let index = nearbyPeers.firstIndex(where: { $0.pigeonID == peer.pigeonID }) {
+            updateTrustState(for: peer)
+            if let index = nearbyPeers.firstIndex(where: { $0.publicKey == peer.publicKey }) {
                 nearbyPeers[index] = peer
+            } else {
+                nearbyPeers.append(peer)
             }
         }
     }
 
-    nonisolated func bleManager(_ manager: BLEManager, didLosePeer pigeonID: String) {
+    nonisolated func bleManager(_ manager: BLEManager, didLosePeer publicKey: Data) {
         Task { @MainActor in
-            nearbyPeers.removeAll(where: { $0.pigeonID == pigeonID })
+            nearbyPeers.removeAll(where: { $0.publicKey == publicKey })
         }
     }
 

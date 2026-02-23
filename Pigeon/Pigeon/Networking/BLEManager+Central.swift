@@ -78,14 +78,11 @@ extension BLEManager: CBCentralManagerDelegate {
         let peripheralID = peripheral.identifier
 
         if let publicKey = peripheralPeerMap[peripheralID] {
-            let pigeonID = nearbyPeers[publicKey]?.pigeonID
             nearbyPeers.removeValue(forKey: publicKey)
             peerPeripheralMap.removeValue(forKey: publicKey)
-            if let pigeonID {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    delegate?.bleManager(self, didLosePeer: pigeonID)
-                }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                delegate?.bleManager(self, didLosePeer: publicKey)
             }
         }
 
@@ -221,7 +218,6 @@ extension BLEManager: CBPeripheralDelegate {
             let now = Date()
             let peer = Peer(
                 publicKey: payload.publicKey,
-                pigeonID: payload.pigeonID,
                 displayName: payload.displayName,
                 rssi: nil,
                 firstSeen: nearbyPeers[payload.publicKey]?.firstSeen ?? now,

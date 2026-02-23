@@ -40,7 +40,6 @@ final class StoredPeer {
     func toDTO(rssi: Int? = nil) -> Peer {
         Peer(
             publicKey: publicKey,
-            pigeonID: pigeonID,
             displayName: displayName,
             rssi: rssi,
             firstSeen: firstSeen,

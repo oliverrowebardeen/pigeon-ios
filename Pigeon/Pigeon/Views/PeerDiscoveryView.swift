@@ -3,6 +3,8 @@ import SwiftUI
 struct PeerDiscoveryView: View {
     @Environment(AppCoordinator.self) private var coordinator
     @State private var navigationPath = NavigationPath()
+    @State private var pendingWarningPeer: Peer?
+    @State private var pendingWarning: PeerKeyChangeWarning?
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
@@ -19,6 +21,28 @@ struct PeerDiscoveryView: View {
             .toolbarColorScheme(.dark, for: .navigationBar)
             .navigationDestination(for: Conversation.self) { conversation in
                 ChatView(conversation: conversation)
+            }
+            .alert(
+                "Security Warning",
+                isPresented: warningBinding,
+                presenting: pendingWarning
+            ) { warning in
+                Button("Cancel", role: .cancel) {
+                    pendingWarningPeer = nil
+                    pendingWarning = nil
+                }
+                Button("Trust New Key", role: .destructive) {
+                    coordinator.confirmPeerKeyChange(for: warning.peerPublicKey)
+                    if let peer = pendingWarningPeer {
+                        startConversation(with: peer)
+                    }
+                    pendingWarningPeer = nil
+                    pendingWarning = nil
+                }
+            } message: { warning in
+                Text(
+                    "\(warning.displayName) was previously trusted as \(warning.previousPigeonID), but is now advertising \(warning.currentPigeonID). Messaging is paused until you confirm this key change."
+                )
             }
         }
     }
@@ -62,11 +86,29 @@ struct PeerDiscoveryView: View {
     }
 
     private func startConversation(with peer: Peer) {
+        if let warning = coordinator.peerKeyChangeWarning(for: peer) {
+            pendingWarningPeer = peer
+            pendingWarning = warning
+            return
+        }
+
         do {
             let conversation = try coordinator.startConversation(with: peer)
             navigationPath.append(conversation)
         } catch {
             // Handle error
         }
+    }
+
+    private var warningBinding: Binding<Bool> {
+        Binding(
+            get: { pendingWarning != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingWarning = nil
+                    pendingWarningPeer = nil
+                }
+            }
+        )
     }
 }
