@@ -2,6 +2,7 @@ import Foundation
 
 nonisolated enum MessageStatus: String, Codable, CaseIterable, Sendable {
     case sending
+    case queued
     case sent
     case delivered
     case failed

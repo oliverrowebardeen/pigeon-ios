@@ -55,6 +55,14 @@ final class BLEManager: NSObject {
     var peerPeripheralMap: [Data: UUID] = [:]
     var peripheralMessageChars: [UUID: CBCharacteristic] = [:]
     var peripheralACKChars: [UUID: CBCharacteristic] = [:]
+    let reconnectDelaySeconds: TimeInterval = 1.0
+    var backgroundConnectOptions: [String: Any] {
+        [
+            CBConnectPeripheralOptionNotifyOnConnectionKey: true,
+            CBConnectPeripheralOptionNotifyOnDisconnectionKey: true,
+            CBConnectPeripheralOptionNotifyOnNotificationKey: true
+        ]
+    }
 
     // MARK: - Reassembly
 
@@ -143,6 +151,7 @@ final class BLEManager: NSObject {
 
     func startScanning() {
         guard centralManager.state == .poweredOn else { return }
+        guard centralManager.isScanning == false else { return }
         centralManager.scanForPeripherals(
             withServices: [BLEConstants.serviceUUID],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
@@ -151,6 +160,7 @@ final class BLEManager: NSObject {
 
     func startAdvertising() {
         guard peripheralManager.state == .poweredOn else { return }
+        guard peripheralManager.isAdvertising == false else { return }
 
         setupService()
 
@@ -177,6 +187,29 @@ final class BLEManager: NSObject {
                 CBAdvertisementDataServiceUUIDsKey: [BLEConstants.serviceUUID],
                 CBAdvertisementDataLocalNameKey: currentDisplayName ?? "Pigeon"
             ])
+        }
+    }
+
+    func refreshRadioActivity() {
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+
+            if centralManager?.state == .poweredOn {
+                startScanning()
+                reconnectKnownPeripherals()
+            }
+
+            if peripheralManager?.state == .poweredOn {
+                startAdvertising()
+            }
+        }
+    }
+
+    private func reconnectKnownPeripherals() {
+        guard let centralManager, centralManager.state == .poweredOn else { return }
+
+        for peripheral in discoveredPeripherals.values where peripheral.state == .disconnected {
+            centralManager.connect(peripheral, options: backgroundConnectOptions)
         }
     }
 

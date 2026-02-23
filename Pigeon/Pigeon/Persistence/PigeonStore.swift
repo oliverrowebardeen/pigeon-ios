@@ -46,6 +46,18 @@ final class PigeonStore {
         return try modelContext.fetch(descriptor).first?.toDTO()
     }
 
+    func fetchPendingOutgoingMessages() throws -> [Message] {
+        let predicate = #Predicate<StoredMessage> { $0.isIncoming == false }
+        let sort = SortDescriptor(\StoredMessage.timestamp, order: .forward)
+        let descriptor = FetchDescriptor<StoredMessage>(predicate: predicate, sortBy: [sort])
+
+        return try modelContext.fetch(descriptor)
+            .map { $0.toDTO() }
+            .filter { message in
+                message.status == .sending || message.status == .sent || message.status == .queued
+            }
+    }
+
     // MARK: - Conversations
 
     func saveConversation(_ conversation: Conversation) throws {

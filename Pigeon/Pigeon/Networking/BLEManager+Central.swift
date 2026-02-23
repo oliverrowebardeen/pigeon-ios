@@ -35,7 +35,7 @@ extension BLEManager: CBCentralManagerDelegate {
         if discoveredPeripherals[peripheralID] == nil {
             discoveredPeripherals[peripheralID] = peripheral
             peripheral.delegate = self
-            central.connect(peripheral, options: nil)
+            central.connect(peripheral, options: backgroundConnectOptions)
         }
 
         // Update RSSI for already-known peers
@@ -63,11 +63,10 @@ extension BLEManager: CBCentralManagerDelegate {
         didFailToConnect peripheral: CBPeripheral,
         error: Error?
     ) {
-        discoveredPeripherals.removeValue(forKey: peripheral.identifier)
-        // Retry after a delay
-        bleQueue.asyncAfter(deadline: .now() + 2.0) { [weak central] in
-            guard let central, central.state == .poweredOn else { return }
-            central.connect(peripheral, options: nil)
+        // Retry after a short delay to keep background links warm while locked.
+        bleQueue.asyncAfter(deadline: .now() + reconnectDelaySeconds) { [weak self, weak central] in
+            guard let self, let central, central.state == .poweredOn else { return }
+            central.connect(peripheral, options: self.backgroundConnectOptions)
         }
     }
 
@@ -95,10 +94,12 @@ extension BLEManager: CBCentralManagerDelegate {
         peripheralMessageChars.removeValue(forKey: peripheralID)
         peripheralACKChars.removeValue(forKey: peripheralID)
 
-        // Attempt reconnection if the peripheral is still in range
+        // Attempt reconnection immediately so iOS can wake us on reconnection events while locked.
         if central.state == .poweredOn {
-            discoveredPeripherals.removeValue(forKey: peripheralID)
-            // Let scanning re-discover and reconnect
+            bleQueue.asyncAfter(deadline: .now() + reconnectDelaySeconds) { [weak self, weak central] in
+                guard let self, let central, central.state == .poweredOn else { return }
+                central.connect(peripheral, options: self.backgroundConnectOptions)
+            }
         }
     }
 
@@ -111,9 +112,13 @@ extension BLEManager: CBCentralManagerDelegate {
                     connectedPeripherals[peripheral.identifier] = peripheral
                     peripheral.discoverServices([BLEConstants.serviceUUID])
                 } else {
-                    central.connect(peripheral, options: nil)
+                    central.connect(peripheral, options: backgroundConnectOptions)
                 }
             }
+        }
+
+        if central.state == .poweredOn {
+            startScanning()
         }
     }
 }

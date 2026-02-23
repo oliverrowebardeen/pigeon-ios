@@ -29,10 +29,10 @@ struct MessageBubbleView: View {
                 }
                 .padding(.horizontal, 4)
 
-                if !message.isIncoming, message.status == .failed {
-                    Text("Failed to send")
+                if !message.isIncoming, let statusLabel {
+                    Text(statusLabel)
                         .font(PigeonTheme.captionFont)
-                        .foregroundColor(PigeonTheme.error)
+                        .foregroundColor(statusLabelColor)
                         .padding(.horizontal, 4)
                 }
             }
@@ -48,6 +48,10 @@ struct MessageBubbleView: View {
             Image(systemName: "clock")
                 .font(.system(size: 10))
                 .foregroundColor(PigeonTheme.textTertiary)
+        case .queued:
+            Image(systemName: "tray.and.arrow.down")
+                .font(.system(size: 10))
+                .foregroundColor(PigeonTheme.textSecondary)
         case .sent:
             Image(systemName: "checkmark")
                 .font(.system(size: 10))
@@ -60,6 +64,32 @@ struct MessageBubbleView: View {
             Image(systemName: "exclamationmark.circle.fill")
                 .font(.system(size: 10))
                 .foregroundColor(PigeonTheme.error)
+        }
+    }
+
+    private var statusLabel: String? {
+        switch message.status {
+        case .sending:
+            return "Sending..."
+        case .queued:
+            return "Queued (not sent yet)"
+        case .failed:
+            return "Failed to send"
+        case .sent, .delivered:
+            return nil
+        }
+    }
+
+    private var statusLabelColor: Color {
+        switch message.status {
+        case .failed:
+            return PigeonTheme.error
+        case .queued:
+            return PigeonTheme.textSecondary
+        case .sending:
+            return PigeonTheme.textTertiary
+        case .sent, .delivered:
+            return PigeonTheme.textTertiary
         }
     }
 }

@@ -15,8 +15,11 @@ final class AppCoordinator {
     var nearbyPeers: [Peer] = []
     var bleState: BLEManager.State = .idle
     private(set) var messageChangeToken = 0
-    private let deliveryFailureTimeoutNanoseconds: UInt64 = 30_000_000_000
+    private let deliveryQueueTimeoutNanoseconds: UInt64 = 20_000_000_000
     private var deliveryTimeoutTasks: [UUID: Task<Void, Never>] = [:]
+    private var didStartBLE = false
+    private var didRestoreOutboundQueue = false
+    private var didRunInitialStartup = false
 
     init(store: PigeonStore) throws {
         let identity = try PigeonIdentity.loadOrCreate()
@@ -32,9 +35,15 @@ final class AppCoordinator {
         )
     }
 
+    func bootstrap() {
+        activateBLEIfNeeded()
+        restoreOutboundQueueIfNeeded()
+    }
+
     func start() async {
-        bleManager.delegate = self
-        bleManager.start()
+        bootstrap()
+        guard !didRunInitialStartup else { return }
+        didRunInitialStartup = true
         _ = await NotificationManager.shared.requestPermission()
         await loadConversations()
     }
@@ -70,9 +79,14 @@ final class AppCoordinator {
 
             bleManager.sendMessage(envelope, to: conversation.peerPublicKey)
 
-            try store.updateMessageStatus(id: message.id, status: .sent)
+            let outboundStatus: MessageStatus = isPeerNearby(publicKey: conversation.peerPublicKey) ? .sent : .queued
+            try store.updateMessageStatus(id: message.id, status: outboundStatus)
             try store.updateConversationPreview(id: conversation.id, preview: text, timestamp: message.timestamp)
-            scheduleDeliveryTimeout(for: message.id)
+            if outboundStatus == .sent {
+                scheduleDeliveryTimeout(for: message.id)
+            } else {
+                cancelDeliveryTimeout(for: message.id)
+            }
             markMessagesChanged()
 
             await loadConversations()
@@ -84,7 +98,7 @@ final class AppCoordinator {
                 recipientPublicKey: message.recipientPublicKey,
                 plaintext: message.plaintext,
                 timestamp: message.timestamp,
-                status: .sent,
+                status: outboundStatus,
                 isIncoming: false
             )
         } catch {
@@ -125,12 +139,22 @@ final class AppCoordinator {
         bleManager.updateDisplayName(identity.displayName)
     }
 
+    func applicationDidBecomeActive() {
+        bootstrap()
+        bleManager.refreshRadioActivity()
+    }
+
+    func applicationDidEnterBackground() {
+        bootstrap()
+        bleManager.refreshRadioActivity()
+    }
+
     private func scheduleDeliveryTimeout(for messageID: UUID) {
         cancelDeliveryTimeout(for: messageID)
 
         deliveryTimeoutTasks[messageID] = Task { [weak self] in
             do {
-                try await Task.sleep(nanoseconds: self?.deliveryFailureTimeoutNanoseconds ?? 30_000_000_000)
+                try await Task.sleep(nanoseconds: self?.deliveryQueueTimeoutNanoseconds ?? 20_000_000_000)
             } catch {
                 return
             }
@@ -155,13 +179,52 @@ final class AppCoordinator {
             return
         }
 
-        try? store.updateMessageStatus(id: messageID, status: .failed)
+        try? store.updateMessageStatus(id: messageID, status: .queued)
         markMessagesChanged()
         await loadConversations()
     }
 
     private func markMessagesChanged() {
         messageChangeToken &+= 1
+    }
+
+    private func activateBLEIfNeeded() {
+        guard !didStartBLE else { return }
+        didStartBLE = true
+        bleManager.delegate = self
+        bleManager.start()
+    }
+
+    private func restoreOutboundQueueIfNeeded() {
+        guard !didRestoreOutboundQueue else { return }
+        didRestoreOutboundQueue = true
+
+        let pendingMessages = (try? store.fetchPendingOutgoingMessages()) ?? []
+        guard !pendingMessages.isEmpty else { return }
+
+        for message in pendingMessages {
+            do {
+                let envelope = try crypto.encrypt(
+                    plaintext: message.plaintext,
+                    senderPrivateKey: identity.privateKey,
+                    recipientPublicKeyData: message.recipientPublicKey,
+                    messageID: message.id,
+                    timestamp: message.timestamp
+                )
+                bleManager.sendMessage(envelope, to: message.recipientPublicKey)
+
+                if message.status == .sending || message.status == .sent {
+                    try? store.updateMessageStatus(id: message.id, status: .queued)
+                }
+            } catch {
+                try? store.updateMessageStatus(id: message.id, status: .failed)
+            }
+        }
+
+        markMessagesChanged()
+        Task {
+            await loadConversations()
+        }
     }
 }
 
