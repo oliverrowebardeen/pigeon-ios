@@ -18,6 +18,7 @@ extension BLEManager: CBCentralManagerDelegate {
             peerPeripheralMap.removeAll()
             peripheralMessageChars.removeAll()
             peripheralACKChars.removeAll()
+            lastConnectAttemptAt.removeAll()
             nearbyPeers.removeAll()
         default:
             break
@@ -31,11 +32,25 @@ extension BLEManager: CBCentralManagerDelegate {
         rssi RSSI: NSNumber
     ) {
         let peripheralID = peripheral.identifier
+        discoveredPeripherals[peripheralID] = peripheral
+        peripheral.delegate = self
 
-        if discoveredPeripherals[peripheralID] == nil {
-            discoveredPeripherals[peripheralID] = peripheral
-            peripheral.delegate = self
-            central.connect(peripheral, options: backgroundConnectOptions)
+        switch peripheral.state {
+        case .connected:
+            if connectedPeripherals[peripheralID] == nil {
+                connectedPeripherals[peripheralID] = peripheral
+                peripheral.discoverServices([BLEConstants.serviceUUID])
+            } else if peripheralMessageChars[peripheralID] == nil || peripheralACKChars[peripheralID] == nil {
+                peripheral.discoverServices([BLEConstants.serviceUUID])
+            }
+        case .connecting, .disconnecting:
+            break
+        case .disconnected:
+            if connectedPeripherals[peripheralID] == nil {
+                connectToPeripheral(peripheral, using: central)
+            }
+        @unknown default:
+            break
         }
 
         // Update RSSI for already-known peers
@@ -53,6 +68,7 @@ extension BLEManager: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         let peripheralID = peripheral.identifier
+        lastConnectAttemptAt.removeValue(forKey: peripheralID)
         connectedPeripherals[peripheralID] = peripheral
         peripheral.delegate = self
         peripheral.discoverServices([BLEConstants.serviceUUID])
@@ -66,7 +82,7 @@ extension BLEManager: CBCentralManagerDelegate {
         // Retry after a short delay to keep background links warm while locked.
         bleQueue.asyncAfter(deadline: .now() + reconnectDelaySeconds) { [weak self, weak central] in
             guard let self, let central, central.state == .poweredOn else { return }
-            central.connect(peripheral, options: self.backgroundConnectOptions)
+            connectToPeripheral(peripheral, using: central)
         }
     }
 
@@ -95,7 +111,7 @@ extension BLEManager: CBCentralManagerDelegate {
         if central.state == .poweredOn {
             bleQueue.asyncAfter(deadline: .now() + reconnectDelaySeconds) { [weak self, weak central] in
                 guard let self, let central, central.state == .poweredOn else { return }
-                central.connect(peripheral, options: self.backgroundConnectOptions)
+                connectToPeripheral(peripheral, using: central)
             }
         }
     }
@@ -106,10 +122,11 @@ extension BLEManager: CBCentralManagerDelegate {
                 discoveredPeripherals[peripheral.identifier] = peripheral
                 peripheral.delegate = self
                 if peripheral.state == .connected {
+                    lastConnectAttemptAt.removeValue(forKey: peripheral.identifier)
                     connectedPeripherals[peripheral.identifier] = peripheral
                     peripheral.discoverServices([BLEConstants.serviceUUID])
                 } else {
-                    central.connect(peripheral, options: backgroundConnectOptions)
+                    connectToPeripheral(peripheral, using: central)
                 }
             }
         }

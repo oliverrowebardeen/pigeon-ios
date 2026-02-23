@@ -184,7 +184,7 @@ final class AppCoordinator {
 
     func applicationDidBecomeActive() {
         bootstrap()
-        bleManager.refreshRadioActivity()
+        bleManager.refreshRadioActivity(forceRestart: true)
     }
 
     func applicationDidEnterBackground() {

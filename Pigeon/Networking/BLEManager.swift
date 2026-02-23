@@ -56,6 +56,8 @@ final class BLEManager: NSObject {
     var peripheralMessageChars: [UUID: CBCharacteristic] = [:]
     var peripheralACKChars: [UUID: CBCharacteristic] = [:]
     let reconnectDelaySeconds: TimeInterval = 1.0
+    let reconnectAttemptIntervalSeconds: TimeInterval = 2.0
+    var lastConnectAttemptAt: [UUID: Date] = [:]
     var backgroundConnectOptions: [String: Any] {
         [
             CBConnectPeripheralOptionNotifyOnConnectionKey: true,
@@ -130,6 +132,7 @@ final class BLEManager: NSObject {
         peerPeripheralMap.removeAll()
         peripheralMessageChars.removeAll()
         peripheralACKChars.removeAll()
+        lastConnectAttemptAt.removeAll()
         reassemblyBuffers.removeAll()
         nearbyPeers.removeAll()
         state = .idle
@@ -190,16 +193,22 @@ final class BLEManager: NSObject {
         }
     }
 
-    func refreshRadioActivity() {
+    func refreshRadioActivity(forceRestart: Bool = false) {
         bleQueue.async { [weak self] in
             guard let self else { return }
 
-            if centralManager?.state == .poweredOn {
+            if let centralManager, centralManager.state == .poweredOn {
+                if forceRestart, centralManager.isScanning {
+                    centralManager.stopScan()
+                }
                 startScanning()
                 reconnectKnownPeripherals()
             }
 
-            if peripheralManager?.state == .poweredOn {
+            if let peripheralManager, peripheralManager.state == .poweredOn {
+                if forceRestart, peripheralManager.isAdvertising {
+                    peripheralManager.stopAdvertising()
+                }
                 startAdvertising()
             }
         }
@@ -209,8 +218,21 @@ final class BLEManager: NSObject {
         guard let centralManager, centralManager.state == .poweredOn else { return }
 
         for peripheral in discoveredPeripherals.values where peripheral.state == .disconnected {
-            centralManager.connect(peripheral, options: backgroundConnectOptions)
+            connectToPeripheral(peripheral, using: centralManager)
         }
+    }
+
+    func connectToPeripheral(_ peripheral: CBPeripheral, using central: CBCentralManager) {
+        let peripheralID = peripheral.identifier
+        let now = Date()
+
+        if let lastAttempt = lastConnectAttemptAt[peripheralID],
+           now.timeIntervalSince(lastAttempt) < reconnectAttemptIntervalSeconds {
+            return
+        }
+
+        lastConnectAttemptAt[peripheralID] = now
+        central.connect(peripheral, options: backgroundConnectOptions)
     }
 
     private func setupService() {
