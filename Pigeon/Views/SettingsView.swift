@@ -39,9 +39,30 @@ struct SettingsView: View {
             }
             .listRowBackground(PigeonTheme.surface)
 
+            HStack {
+                Text("Internet Relay")
+                Spacer()
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(relayStatusColor)
+                        .frame(width: 8, height: 8)
+                    Text(relayStatusText)
+                        .foregroundColor(PigeonTheme.textSecondary)
+                }
+            }
+            .listRowBackground(PigeonTheme.surface)
+
             Toggle("Mesh Relay", isOn: $meshRelayEnabled)
                 .tint(PigeonTheme.accent)
                 .listRowBackground(PigeonTheme.surface)
+
+            HStack {
+                Text("APNS Token")
+                Spacer()
+                Text(coordinator.relayPushTokenRegistered ? "Registered" : "Waiting")
+                    .foregroundColor(PigeonTheme.textSecondary)
+            }
+            .listRowBackground(PigeonTheme.surface)
 
             HStack {
                 Text("Your Pigeon ID")
@@ -127,6 +148,22 @@ struct SettingsView: View {
         case .unauthorized: return "Unauthorized"
         case .unsupported: return "Unsupported"
         case .poweredOff: return "Bluetooth Off"
+        }
+    }
+
+    private var relayStatusColor: Color {
+        switch coordinator.transportState {
+        case .internetConnected: return PigeonTheme.success
+        case .internetDisconnected: return PigeonTheme.error
+        case .bleOnly: return PigeonTheme.textTertiary
+        }
+    }
+
+    private var relayStatusText: String {
+        switch coordinator.transportState {
+        case .internetConnected: return "Connected"
+        case .internetDisconnected: return "Disconnected"
+        case .bleOnly: return "Disabled"
         }
     }
 

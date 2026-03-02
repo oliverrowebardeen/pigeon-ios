@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Observation
+import UIKit
 
 nonisolated enum AppCoordinatorError: Error {
     case untrustedPeerKey
@@ -24,14 +25,19 @@ final class AppCoordinator {
     let crypto: CryptoManager
     let router: MeshRouter
     private let keyStore: KeyStore
+    let relayClient: InternetRelayClient?
+    let relayURL: URL?
 
     var conversations: [Conversation] = []
     var nearbyPeers: [Peer] = []
     var bleState: BLEManager.State = .idle
+    var transportState: TransportState = .bleOnly
+    var relayPushTokenRegistered = false
     private(set) var messageChangeToken = 0
     private let deliveryQueueTimeoutNanoseconds: UInt64 = 20_000_000_000
     private var deliveryTimeoutTasks: [UUID: Task<Void, Never>] = [:]
     private var didStartBLE = false
+    private var didStartRelay = false
     private var didRestoreOutboundQueue = false
     private var didRunInitialStartup = false
     private var peerKeyChangeWarnings: [Data: PeerKeyChangeWarning] = [:]
@@ -49,10 +55,19 @@ final class AppCoordinator {
             router: router,
             store: store
         )
+        relayURL = Self.relayWebSocketURL()
+        if let relayURL {
+            relayClient = InternetRelayClient(identity: identity, relayURL: relayURL)
+            transportState = .internetDisconnected
+        } else {
+            relayClient = nil
+            transportState = .bleOnly
+        }
     }
 
     func bootstrap() {
         activateBLEIfNeeded()
+        activateRelayIfNeeded()
         restoreOutboundQueueIfNeeded()
     }
 
@@ -60,7 +75,10 @@ final class AppCoordinator {
         bootstrap()
         guard !didRunInitialStartup else { return }
         didRunInitialStartup = true
-        _ = await NotificationManager.shared.requestPermission()
+        let notificationGranted = await NotificationManager.shared.requestPermission()
+        if notificationGranted {
+            UIApplication.shared.registerForRemoteNotifications()
+        }
         await loadConversations()
     }
 
@@ -97,9 +115,14 @@ final class AppCoordinator {
                 messageID: message.id
             )
 
-            bleManager.sendMessage(envelope, to: conversation.peerPublicKey)
+            let usedInternetRelay = await sendViaInternetRelayOrFallbackToBLE(
+                envelope,
+                recipientPublicKey: conversation.peerPublicKey
+            )
 
-            let outboundStatus: MessageStatus = isPeerNearby(publicKey: conversation.peerPublicKey) ? .sent : .queued
+            let outboundStatus: MessageStatus = usedInternetRelay
+                ? .sent
+                : (isPeerNearby(publicKey: conversation.peerPublicKey) ? .sent : .queued)
             try store.updateMessageStatus(id: message.id, status: outboundStatus)
             try store.updateConversationPreview(id: conversation.id, preview: text, timestamp: message.timestamp)
             if outboundStatus == .sent {
@@ -154,6 +177,22 @@ final class AppCoordinator {
         Task { await loadConversations() }
     }
 
+    func didRegisterRemoteDeviceToken(_ token: Data) {
+        relayPushTokenRegistered = true
+        guard let relayClient else { return }
+
+        Task {
+            await relayClient.registerPushToken(token)
+        }
+    }
+
+    func handleRemoteNotification(_: [AnyHashable: Any]) {
+        guard let relayClient else { return }
+        Task {
+            await relayClient.reconnect()
+        }
+    }
+
     func isPeerNearby(publicKey: Data) -> Bool {
         nearbyPeers.contains(where: { $0.publicKey == publicKey })
     }
@@ -185,11 +224,104 @@ final class AppCoordinator {
     func applicationDidBecomeActive() {
         bootstrap()
         bleManager.refreshRadioActivity(forceRestart: true)
+        if let relayClient {
+            Task {
+                await relayClient.reconnect()
+            }
+        }
     }
 
     func applicationDidEnterBackground() {
         bootstrap()
         bleManager.refreshRadioActivity()
+    }
+
+    private func sendViaInternetRelayOrFallbackToBLE(
+        _ envelope: MessageEnvelope,
+        recipientPublicKey: Data
+    ) async -> Bool {
+        if let relayClient {
+            do {
+                try await relayClient.sendEnvelope(envelope)
+                return true
+            } catch {
+                // Fall back to BLE if internet relay is unavailable.
+            }
+        }
+
+        bleManager.sendMessage(envelope, to: recipientPublicKey)
+        return false
+    }
+
+    private func handleRelayDeliveredEnvelope(_ envelope: MessageEnvelope) async {
+        guard envelope.recipientPublicKey == identity.publicKey.rawRepresentation else {
+            return
+        }
+
+        guard peerKeyChangeWarnings[envelope.senderPublicKey] == nil else {
+            return
+        }
+
+        if let existing = try? store.fetchMessage(id: envelope.id), existing != nil {
+            await acknowledgeRelayMessage(envelope.id)
+            return
+        }
+
+        do {
+            let plaintext = try crypto.decryptToString(
+                envelope: envelope,
+                recipientPrivateKey: identity.privateKey
+            )
+
+            let peer = Peer(
+                publicKey: envelope.senderPublicKey,
+                displayName: nearbyPeers.first(where: { $0.publicKey == envelope.senderPublicKey })?.displayName,
+                firstSeen: Date(),
+                lastSeen: Date(),
+                isSaved: false
+            )
+
+            let conversation = try store.getOrCreateConversation(for: peer)
+
+            let message = Message(
+                id: envelope.id,
+                conversationID: conversation.id,
+                senderPublicKey: envelope.senderPublicKey,
+                recipientPublicKey: envelope.recipientPublicKey,
+                plaintext: plaintext,
+                timestamp: envelope.timestamp,
+                status: .delivered,
+                isIncoming: true
+            )
+
+            try store.saveMessage(message)
+            try store.updateConversationPreview(
+                id: conversation.id,
+                preview: message.plaintext,
+                timestamp: message.timestamp
+            )
+            try store.incrementUnreadCount(conversationID: conversation.id)
+            markMessagesChanged()
+            await loadConversations()
+
+            let senderName = nearbyPeers.first(where: { $0.publicKey == message.senderPublicKey })?.displayName
+                ?? PigeonIdentity.makePigeonID(fromPublicKeyData: message.senderPublicKey)
+
+            NotificationManager.shared.showMessageNotification(
+                from: senderName,
+                preview: message.plaintext,
+                conversationID: conversation.id
+            )
+        } catch {
+            // Drop malformed/un-decryptable relay message.
+        }
+
+        await acknowledgeRelayMessage(envelope.id)
+    }
+
+    private func acknowledgeRelayMessage(_ messageID: UUID) async {
+        guard let relayClient else { return }
+        try? await relayClient.sendDeliveryACK(messageID: messageID)
     }
 
     private func scheduleDeliveryTimeout(for messageID: UUID) {
@@ -292,10 +424,32 @@ final class AppCoordinator {
         bleManager.start()
     }
 
+    private func activateRelayIfNeeded() {
+        guard !didStartRelay else { return }
+        guard let relayClient else {
+            transportState = .bleOnly
+            return
+        }
+
+        didStartRelay = true
+        transportState = .internetDisconnected
+
+        Task {
+            await relayClient.setDelegate(self)
+            await relayClient.start()
+        }
+    }
+
     private func restoreOutboundQueueIfNeeded() {
         guard !didRestoreOutboundQueue else { return }
         didRestoreOutboundQueue = true
 
+        Task {
+            await restorePendingOutboundMessages()
+        }
+    }
+
+    private func restorePendingOutboundMessages() async {
         let pendingMessages = (try? store.fetchPendingOutgoingMessages()) ?? []
         guard !pendingMessages.isEmpty else { return }
 
@@ -312,10 +466,16 @@ final class AppCoordinator {
                     messageID: message.id,
                     timestamp: message.timestamp
                 )
-                bleManager.sendMessage(envelope, to: message.recipientPublicKey)
+                let usedInternetRelay = await sendViaInternetRelayOrFallbackToBLE(
+                    envelope,
+                    recipientPublicKey: message.recipientPublicKey
+                )
 
-                if message.status == .sending || message.status == .sent {
-                    try? store.updateMessageStatus(id: message.id, status: .queued)
+                if message.status == .sending || message.status == .sent || message.status == .queued {
+                    let updatedStatus: MessageStatus = usedInternetRelay
+                        ? .sent
+                        : (isPeerNearby(publicKey: message.recipientPublicKey) ? .sent : .queued)
+                    try? store.updateMessageStatus(id: message.id, status: updatedStatus)
                 }
             } catch {
                 try? store.updateMessageStatus(id: message.id, status: .failed)
@@ -326,6 +486,15 @@ final class AppCoordinator {
         Task {
             await loadConversations()
         }
+    }
+
+    private static func relayWebSocketURL(bundle: Bundle = .main) -> URL? {
+        let enabled = (bundle.object(forInfoDictionaryKey: "PigeonRelayEnabled") as? Bool) ?? false
+        guard enabled else { return nil }
+        guard let relayURLString = bundle.object(forInfoDictionaryKey: "PigeonRelayWebSocketURL") as? String else {
+            return nil
+        }
+        return URL(string: relayURLString)
     }
 }
 
@@ -413,6 +582,37 @@ extension AppCoordinator: BLEManagerDelegate {
     nonisolated func bleManagerDidUpdateState(_ manager: BLEManager) {
         Task { @MainActor in
             bleState = manager.state
+        }
+    }
+}
+
+// MARK: - InternetRelayClientDelegate
+
+extension AppCoordinator: InternetRelayClientDelegate {
+    nonisolated func relayClientDidConnect() {
+        Task { @MainActor in
+            transportState = .internetConnected
+        }
+    }
+
+    nonisolated func relayClientDidDisconnect() {
+        Task { @MainActor in
+            transportState = relayClient == nil ? .bleOnly : .internetDisconnected
+        }
+    }
+
+    nonisolated func relayClient(didReceiveEnvelope envelope: MessageEnvelope) {
+        Task { @MainActor in
+            await handleRelayDeliveredEnvelope(envelope)
+        }
+    }
+
+    nonisolated func relayClient(didReceiveDeliveryAck messageID: UUID) {
+        Task { @MainActor in
+            cancelDeliveryTimeout(for: messageID)
+            try? store.updateMessageStatus(id: messageID, status: .delivered)
+            markMessagesChanged()
+            await loadConversations()
         }
     }
 }

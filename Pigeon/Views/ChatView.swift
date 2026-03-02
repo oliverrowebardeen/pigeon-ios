@@ -73,12 +73,12 @@ struct ChatView: View {
     private var connectionStatusBanner: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
+                .fill(connectionBannerColor)
                 .frame(width: 8, height: 8)
 
-            Text(isPeerNearby ? "Peer nearby" : "Peer out of range. Messages will queue until detected.")
+            Text(connectionBannerText)
                 .font(PigeonTheme.captionFont)
-                .foregroundColor(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
+                .foregroundColor(connectionBannerColor)
 
             Spacer()
         }
@@ -117,6 +117,23 @@ struct ChatView: View {
 
     private var isPeerNearby: Bool {
         coordinator.isPeerNearby(publicKey: conversation.peerPublicKey)
+    }
+
+    private var connectionBannerText: String {
+        if coordinator.transportState == .internetConnected {
+            return "Internet relay active. Mesh fallback enabled."
+        }
+
+        return isPeerNearby
+            ? "Peer nearby"
+            : "Peer out of range. Messages will queue until detected."
+    }
+
+    private var connectionBannerColor: Color {
+        if coordinator.transportState == .internetConnected {
+            return PigeonTheme.success
+        }
+        return isPeerNearby ? PigeonTheme.success : PigeonTheme.error
     }
 
     private func loadMessages() {

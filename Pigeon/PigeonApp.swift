@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct PigeonApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    @UIApplicationDelegateAdaptor(PigeonAppDelegate.self) private var appDelegate
     @State private var coordinator: AppCoordinator
 
     init() {
@@ -24,6 +25,9 @@ struct PigeonApp: App {
                 .modelContainer(coordinator.store.modelContainer)
                 .task {
                     await coordinator.start()
+                }
+                .onAppear {
+                    appDelegate.coordinator = coordinator
                 }
                 .onChange(of: scenePhase) {
                     switch scenePhase {
