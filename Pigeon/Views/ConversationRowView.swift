@@ -38,13 +38,23 @@ struct ConversationRowView: View {
             }
 
             HStack(spacing: 6) {
-                Circle()
-                    .fill(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
-                    .frame(width: 6, height: 6)
+                if conversation.kind == .group {
+                    Image(systemName: "person.3.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(PigeonTheme.textSecondary)
 
-                Text(isPeerNearby ? "Nearby" : "Out of range")
-                    .font(PigeonTheme.captionFont)
-                    .foregroundColor(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
+                    Text("\(conversation.memberCount) members")
+                        .font(PigeonTheme.captionFont)
+                        .foregroundColor(PigeonTheme.textSecondary)
+                } else {
+                    Circle()
+                        .fill(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
+                        .frame(width: 6, height: 6)
+
+                    Text(isPeerNearby ? "Nearby" : "Out of range")
+                        .font(PigeonTheme.captionFont)
+                        .foregroundColor(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
+                }
             }
 
             HStack {
@@ -66,7 +76,7 @@ struct ConversationRowView: View {
     }
 
     private var displayName: String {
-        conversation.peerDisplayName ?? conversation.derivedPeerPigeonID
+        conversation.displayTitle
     }
 
     private var avatarLetter: String {

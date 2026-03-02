@@ -9,6 +9,8 @@
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Pigeon uses Bluetooth to discover nearby peers and exchange encrypted messages without internet.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Pigeon uses the camera to scan group invite QR codes.</string>
 	<key>PigeonRelayEnabled</key>
 	<true/>
 	<key>PigeonRelayWebSocketURL</key>

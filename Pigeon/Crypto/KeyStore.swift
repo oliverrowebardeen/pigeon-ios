@@ -14,6 +14,7 @@ nonisolated final class KeyStore: Sendable {
     private enum Account {
         static let identityPrivateKey = "identity.private-key"
         static let peerPrefix = "peer."
+        static let groupPrefix = "group."
     }
 
     private init() {}
@@ -93,6 +94,57 @@ nonisolated final class KeyStore: Sendable {
         }
     }
 
+    func saveGroupSymmetricKey(_ keyData: Data, groupID: UUID, epoch: Int) throws {
+        try save(data: keyData, account: groupKeyAccount(groupID: groupID, epoch: epoch))
+    }
+
+    func loadGroupSymmetricKey(groupID: UUID, epoch: Int) throws -> Data? {
+        try loadData(account: groupKeyAccount(groupID: groupID, epoch: epoch))
+    }
+
+    func deleteAllGroupSymmetricKeys() throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        if status == errSecItemNotFound {
+            return
+        }
+
+        guard status == errSecSuccess else {
+            throw KeyStoreError.unexpectedStatus(status)
+        }
+
+        guard let rawItems = result as? [[String: Any]] else {
+            throw KeyStoreError.invalidItemData
+        }
+
+        for item in rawItems {
+            guard
+                let account = item[kSecAttrAccount as String] as? String,
+                account.hasPrefix(Account.groupPrefix)
+            else {
+                continue
+            }
+
+            let deleteQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account
+            ]
+            let deleteStatus = SecItemDelete(deleteQuery as CFDictionary)
+            guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+                throw KeyStoreError.unexpectedStatus(deleteStatus)
+            }
+        }
+    }
+
     private func save(data: Data, account: String) throws {
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -150,5 +202,9 @@ nonisolated final class KeyStore: Sendable {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeyStoreError.unexpectedStatus(status)
         }
+    }
+
+    private func groupKeyAccount(groupID: UUID, epoch: Int) -> String {
+        "\(Account.groupPrefix)\(groupID.uuidString.lowercased()).epoch.\(epoch)"
     }
 }

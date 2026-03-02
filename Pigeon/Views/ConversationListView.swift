@@ -2,6 +2,9 @@ import SwiftUI
 
 struct ConversationListView: View {
     @Environment(AppCoordinator.self) private var coordinator
+    @State private var showNewGroupSheet = false
+    @State private var showInviteScanner = false
+    @State private var inviteResultMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -16,8 +19,57 @@ struct ConversationListView: View {
             }
             .navigationTitle("Messages")
             .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showInviteScanner = true
+                    } label: {
+                        Image(systemName: "qrcode.viewfinder")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showNewGroupSheet = true
+                    } label: {
+                        Image(systemName: "person.3.sequence.fill")
+                    }
+                }
+            }
             .navigationDestination(for: Conversation.self) { conversation in
                 ChatView(conversation: conversation)
+            }
+            .sheet(isPresented: $showNewGroupSheet) {
+                NewGroupView()
+                    .environment(coordinator)
+            }
+            .sheet(isPresented: $showInviteScanner) {
+                NavigationStack {
+                    QRCodeScannerView { code in
+                        do {
+                            _ = try coordinator.consumeGroupInviteTokenString(code)
+                            inviteResultMessage = "Invite accepted. Group added to messages."
+                        } catch {
+                            inviteResultMessage = "Invite invalid or expired."
+                        }
+                        showInviteScanner = false
+                    }
+                    .ignoresSafeArea()
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Close") {
+                                showInviteScanner = false
+                            }
+                        }
+                    }
+                    .toolbarColorScheme(.dark, for: .navigationBar)
+                }
+            }
+            .alert("Group Invite", isPresented: inviteAlertBinding) {
+                Button("OK", role: .cancel) {
+                    inviteResultMessage = nil
+                }
+            } message: {
+                Text(inviteResultMessage ?? "")
             }
         }
     }
@@ -28,7 +80,7 @@ struct ConversationListView: View {
                 NavigationLink(value: conversation) {
                     ConversationRowView(
                         conversation: conversation,
-                        isPeerNearby: coordinator.isPeerNearby(publicKey: conversation.peerPublicKey)
+                        isPeerNearby: conversation.peerPublicKey.map { coordinator.isPeerNearby(publicKey: $0) } ?? false
                     )
                 }
                 .listRowBackground(PigeonTheme.background)
@@ -47,7 +99,7 @@ struct ConversationListView: View {
             Text("No conversations yet")
                 .font(PigeonTheme.headlineFont)
                 .foregroundColor(PigeonTheme.textSecondary)
-            Text("Tap the Nearby tab to find\nnearby Pigeon users.")
+            Text("Tap Nearby to start direct chats\nor use the top-right button for groups.")
                 .font(PigeonTheme.captionFont)
                 .foregroundColor(PigeonTheme.textTertiary)
                 .multilineTextAlignment(.center)
@@ -59,5 +111,16 @@ struct ConversationListView: View {
             let conversation = coordinator.conversations[index]
             try? coordinator.deleteConversation(id: conversation.id)
         }
+    }
+
+    private var inviteAlertBinding: Binding<Bool> {
+        Binding(
+            get: { inviteResultMessage != nil },
+            set: { isPresented in
+                if !isPresented {
+                    inviteResultMessage = nil
+                }
+            }
+        )
     }
 }

@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 protocol BLEManagerDelegate: AnyObject {
-    func bleManager(_ manager: BLEManager, didReceiveMessage message: Message, inConversation conversationID: UUID)
+    func bleManager(_ manager: BLEManager, didReceiveEnvelope envelope: MessageEnvelope)
     func bleManager(_ manager: BLEManager, didDiscoverPeer peer: Peer)
     func bleManager(_ manager: BLEManager, didUpdatePeer peer: Peer)
     func bleManager(_ manager: BLEManager, didLosePeer publicKey: Data)
@@ -328,49 +328,14 @@ final class BLEManager: NSObject {
     }
 
     private func handleMessageForUs(_ envelope: MessageEnvelope) {
-        do {
-            let plaintext = try crypto.decryptToString(
-                envelope: envelope,
-                recipientPrivateKey: identity.privateKey
-            )
-
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-
-                let peer = Peer(
-                    publicKey: envelope.senderPublicKey,
-                    displayName: nearbyPeers[envelope.senderPublicKey]?.displayName,
-                    firstSeen: Date(),
-                    lastSeen: Date(),
-                    isSaved: false
-                )
-
-                let conversation: Conversation
-                do {
-                    conversation = try store.getOrCreateConversation(for: peer)
-                } catch {
-                    return
-                }
-
-                let message = Message(
-                    id: envelope.id,
-                    conversationID: conversation.id,
-                    senderPublicKey: envelope.senderPublicKey,
-                    recipientPublicKey: envelope.recipientPublicKey,
-                    plaintext: plaintext,
-                    timestamp: envelope.timestamp,
-                    status: .delivered,
-                    isIncoming: true
-                )
-
-                delegate?.bleManager(self, didReceiveMessage: message, inConversation: conversation.id)
-            }
-
-            // Send ACK back through the mesh
-            sendACKForMessage(envelope)
-        } catch {
-            // Decryption failed — message wasn't for us or is corrupted
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            delegate?.bleManager(self, didReceiveEnvelope: envelope)
         }
+    }
+
+    func sendACK(for envelope: MessageEnvelope) {
+        sendACKForMessage(envelope)
     }
 
     private func handleMessageForRelay(_ envelope: MessageEnvelope) {

@@ -9,19 +9,60 @@ final class PigeonStore {
     static let schema = Schema([
         StoredMessage.self,
         StoredConversation.self,
-        StoredPeer.self
+        StoredPeer.self,
+        StoredReaction.self,
+        StoredGroup.self,
+        StoredGroupMember.self
     ])
 
     init(inMemory: Bool = false) throws {
-        let config = ModelConfiguration(isStoredInMemoryOnly: inMemory)
-        modelContainer = try ModelContainer(for: Self.schema, configurations: [config])
+        if inMemory {
+            let config = ModelConfiguration(isStoredInMemoryOnly: true)
+            modelContainer = try ModelContainer(for: Self.schema, configurations: [config])
+            return
+        }
+
+        let fm = FileManager.default
+        let appSupport = try fm.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let storeDir = appSupport.appendingPathComponent("Pigeon", isDirectory: true)
+        try fm.createDirectory(at: storeDir, withIntermediateDirectories: true)
+        let storeURL = storeDir.appendingPathComponent("pigeon.store")
+        let config = ModelConfiguration(url: storeURL)
+
+        do {
+            modelContainer = try ModelContainer(for: Self.schema, configurations: [config])
+        } catch {
+            // Schema updates can make old local stores unreadable; wipe and recreate once.
+            try? fm.removeItem(at: storeURL)
+            try? fm.removeItem(at: URL(fileURLWithPath: storeURL.path + "-shm"))
+            try? fm.removeItem(at: URL(fileURLWithPath: storeURL.path + "-wal"))
+            modelContainer = try ModelContainer(for: Self.schema, configurations: [config])
+        }
     }
 
     // MARK: - Messages
 
     func saveMessage(_ message: Message) throws {
-        let stored = StoredMessage(from: message)
-        modelContext.insert(stored)
+        if let existing = try fetchStoredMessage(id: message.id) {
+            existing.conversationID = message.conversationID
+            existing.groupID = message.groupID
+            existing.senderPublicKey = message.senderPublicKey
+            existing.recipientPublicKey = message.recipientPublicKey
+            existing.plaintext = message.plaintext
+            existing.timestamp = message.timestamp
+            existing.status = message.status
+            existing.isIncoming = message.isIncoming
+            existing.replyToMessageID = message.replyToMessageID
+            existing.replyPreview = message.replyPreview
+            existing.replySenderPublicKey = message.replySenderPublicKey
+        } else {
+            modelContext.insert(StoredMessage(from: message))
+        }
         try modelContext.save()
     }
 
@@ -33,36 +74,92 @@ final class PigeonStore {
     }
 
     func updateMessageStatus(id: UUID, status: MessageStatus) throws {
-        let predicate = #Predicate<StoredMessage> { $0.id == id }
-        let descriptor = FetchDescriptor<StoredMessage>(predicate: predicate)
-        guard let stored = try modelContext.fetch(descriptor).first else { return }
+        guard let stored = try fetchStoredMessage(id: id) else { return }
         stored.status = status
         try modelContext.save()
     }
 
     func fetchMessage(id: UUID) throws -> Message? {
-        let predicate = #Predicate<StoredMessage> { $0.id == id }
-        let descriptor = FetchDescriptor<StoredMessage>(predicate: predicate)
-        return try modelContext.fetch(descriptor).first?.toDTO()
+        try fetchStoredMessage(id: id)?.toDTO()
     }
 
     func fetchPendingOutgoingMessages() throws -> [Message] {
-        let predicate = #Predicate<StoredMessage> { $0.isIncoming == false }
+        let sending = MessageStatus.sending.rawValue
+        let sent = MessageStatus.sent.rawValue
+        let queued = MessageStatus.queued.rawValue
+        let predicate = #Predicate<StoredMessage> {
+            $0.isIncoming == false &&
+            ($0.statusRaw == sending || $0.statusRaw == sent || $0.statusRaw == queued)
+        }
         let sort = SortDescriptor(\StoredMessage.timestamp, order: .forward)
         let descriptor = FetchDescriptor<StoredMessage>(predicate: predicate, sortBy: [sort])
+        return try modelContext.fetch(descriptor).map { $0.toDTO() }
+    }
 
-        return try modelContext.fetch(descriptor)
-            .map { $0.toDTO() }
-            .filter { message in
-                message.status == .sending || message.status == .sent || message.status == .queued
-            }
+    // MARK: - Reactions
+
+    func saveOrReplaceReaction(_ reaction: MessageReaction) throws {
+        let predicate = #Predicate<StoredReaction> {
+            $0.messageID == reaction.messageID && $0.reactorPublicKey == reaction.reactorPublicKey
+        }
+        let descriptor = FetchDescriptor<StoredReaction>(predicate: predicate)
+
+        if let existing = try modelContext.fetch(descriptor).first {
+            existing.conversationID = reaction.conversationID
+            existing.groupID = reaction.groupID
+            existing.tapback = reaction.tapback
+            existing.timestamp = reaction.timestamp
+        } else {
+            modelContext.insert(StoredReaction(from: reaction))
+        }
+
+        try modelContext.save()
+    }
+
+    func removeReaction(messageID: UUID, reactorPublicKey: Data) throws {
+        let predicate = #Predicate<StoredReaction> {
+            $0.messageID == messageID && $0.reactorPublicKey == reactorPublicKey
+        }
+        let descriptor = FetchDescriptor<StoredReaction>(predicate: predicate)
+        for reaction in try modelContext.fetch(descriptor) {
+            modelContext.delete(reaction)
+        }
+        try modelContext.save()
+    }
+
+    func fetchReactions(forConversation conversationID: UUID) throws -> [MessageReaction] {
+        let predicate = #Predicate<StoredReaction> { $0.conversationID == conversationID }
+        let sort = SortDescriptor(\StoredReaction.timestamp, order: .forward)
+        let descriptor = FetchDescriptor<StoredReaction>(predicate: predicate, sortBy: [sort])
+        return try modelContext.fetch(descriptor).map { $0.toDTO() }
+    }
+
+    func fetchReaction(messageID: UUID, reactorPublicKey: Data) throws -> MessageReaction? {
+        let predicate = #Predicate<StoredReaction> {
+            $0.messageID == messageID && $0.reactorPublicKey == reactorPublicKey
+        }
+        let descriptor = FetchDescriptor<StoredReaction>(predicate: predicate)
+        return try modelContext.fetch(descriptor).first?.toDTO()
     }
 
     // MARK: - Conversations
 
     func saveConversation(_ conversation: Conversation) throws {
-        let stored = StoredConversation(from: conversation)
-        modelContext.insert(stored)
+        if let existing = try fetchStoredConversation(id: conversation.id) {
+            existing.kind = conversation.kind
+            existing.peerPublicKey = conversation.peerPublicKey
+            existing.peerDisplayName = conversation.peerDisplayName
+            existing.peerPigeonID = conversation.peerPigeonID
+            existing.groupID = conversation.groupID
+            existing.groupName = conversation.groupName
+            existing.groupOwnerPublicKey = conversation.groupOwnerPublicKey
+            existing.memberCount = conversation.memberCount
+            existing.lastMessageTimestamp = conversation.lastMessageTimestamp
+            existing.lastMessagePreview = conversation.lastMessagePreview
+            existing.unreadCount = conversation.unreadCount
+        } else {
+            modelContext.insert(StoredConversation(from: conversation))
+        }
         try modelContext.save()
     }
 
@@ -78,43 +175,58 @@ final class PigeonStore {
         return try modelContext.fetch(descriptor).first?.toDTO()
     }
 
+    func findConversation(byGroupID groupID: UUID) throws -> Conversation? {
+        let predicate = #Predicate<StoredConversation> { $0.groupID == groupID }
+        let descriptor = FetchDescriptor<StoredConversation>(predicate: predicate)
+        return try modelContext.fetch(descriptor).first?.toDTO()
+    }
+
     func getOrCreateConversation(for peer: Peer) throws -> Conversation {
         if let existing = try findConversation(byPeerPublicKey: peer.publicKey) {
             return existing
         }
 
-        let conversation = Conversation(
+        let conversation = Conversation.direct(
             peerPublicKey: peer.publicKey,
             peerDisplayName: peer.displayName,
             peerPigeonID: peer.pigeonID
         )
-        let stored = StoredConversation(from: conversation)
-        modelContext.insert(stored)
+        modelContext.insert(StoredConversation(from: conversation))
+        try modelContext.save()
+        return conversation
+    }
+
+    func getOrCreateGroupConversation(for group: Group, memberCount: Int) throws -> Conversation {
+        if let existing = try findConversation(byGroupID: group.id) {
+            return existing
+        }
+
+        let conversation = Conversation.group(
+            id: group.id,
+            groupName: group.name,
+            groupOwnerPublicKey: group.ownerPublicKey,
+            memberCount: memberCount
+        )
+        modelContext.insert(StoredConversation(from: conversation))
         try modelContext.save()
         return conversation
     }
 
     func updateConversationPreview(id: UUID, preview: String, timestamp: Date) throws {
-        let predicate = #Predicate<StoredConversation> { $0.id == id }
-        let descriptor = FetchDescriptor<StoredConversation>(predicate: predicate)
-        guard let stored = try modelContext.fetch(descriptor).first else { return }
+        guard let stored = try fetchStoredConversation(id: id) else { return }
         stored.lastMessagePreview = String(preview.prefix(100))
         stored.lastMessageTimestamp = timestamp
         try modelContext.save()
     }
 
     func incrementUnreadCount(conversationID: UUID) throws {
-        let predicate = #Predicate<StoredConversation> { $0.id == conversationID }
-        let descriptor = FetchDescriptor<StoredConversation>(predicate: predicate)
-        guard let stored = try modelContext.fetch(descriptor).first else { return }
+        guard let stored = try fetchStoredConversation(id: conversationID) else { return }
         stored.unreadCount += 1
         try modelContext.save()
     }
 
     func clearUnreadCount(conversationID: UUID) throws {
-        let predicate = #Predicate<StoredConversation> { $0.id == conversationID }
-        let descriptor = FetchDescriptor<StoredConversation>(predicate: predicate)
-        guard let stored = try modelContext.fetch(descriptor).first else { return }
+        guard let stored = try fetchStoredConversation(id: conversationID) else { return }
         stored.unreadCount = 0
         try modelContext.save()
     }
@@ -124,6 +236,15 @@ final class PigeonStore {
         let descriptor = FetchDescriptor<StoredConversation>(predicate: predicate)
         guard let stored = try modelContext.fetch(descriptor).first else { return }
         stored.peerDisplayName = displayName
+        try modelContext.save()
+    }
+
+    func updateGroupConversationMetadata(groupID: UUID, groupName: String, memberCount: Int) throws {
+        let predicate = #Predicate<StoredConversation> { $0.groupID == groupID }
+        let descriptor = FetchDescriptor<StoredConversation>(predicate: predicate)
+        guard let stored = try modelContext.fetch(descriptor).first else { return }
+        stored.groupName = groupName
+        stored.memberCount = memberCount
         try modelContext.save()
     }
 
@@ -139,7 +260,79 @@ final class PigeonStore {
             modelContext.delete(message)
         }
 
+        let reactionPredicate = #Predicate<StoredReaction> { $0.conversationID == id }
+        let reactionDescriptor = FetchDescriptor<StoredReaction>(predicate: reactionPredicate)
+        for reaction in try modelContext.fetch(reactionDescriptor) {
+            modelContext.delete(reaction)
+        }
+
         try modelContext.save()
+    }
+
+    // MARK: - Groups
+
+    func saveGroup(_ group: Group) throws {
+        if let existing = try fetchStoredGroup(id: group.id) {
+            existing.name = group.name
+            existing.ownerPublicKey = group.ownerPublicKey
+            existing.activeEpoch = group.activeEpoch
+            existing.updatedAt = group.updatedAt
+        } else {
+            modelContext.insert(StoredGroup(from: group))
+        }
+        try modelContext.save()
+    }
+
+    func fetchGroup(id: UUID) throws -> Group? {
+        try fetchStoredGroup(id: id)?.toDTO()
+    }
+
+    func fetchAllGroups() throws -> [Group] {
+        let sort = SortDescriptor(\StoredGroup.updatedAt, order: .reverse)
+        return try modelContext.fetch(FetchDescriptor<StoredGroup>(sortBy: [sort])).map { $0.toDTO() }
+    }
+
+    func saveGroupMember(_ member: GroupMember) throws {
+        upsertGroupMember(member)
+        try modelContext.save()
+    }
+
+    func saveGroupMembers(_ members: [GroupMember]) throws {
+        for member in members {
+            upsertGroupMember(member)
+        }
+        try modelContext.save()
+    }
+
+    private func upsertGroupMember(_ member: GroupMember) {
+        let predicate = #Predicate<StoredGroupMember> {
+            $0.groupID == member.groupID && $0.publicKey == member.publicKey
+        }
+        let descriptor = FetchDescriptor<StoredGroupMember>(predicate: predicate)
+
+        if let existing = try? modelContext.fetch(descriptor).first {
+            existing.displayName = member.displayName
+            existing.pigeonID = member.pigeonID
+            existing.role = member.role
+            existing.isActive = member.isActive
+            existing.updatedAt = member.updatedAt
+        } else {
+            modelContext.insert(StoredGroupMember(from: member))
+        }
+    }
+
+    func fetchGroupMembers(groupID: UUID, activeOnly: Bool = true) throws -> [GroupMember] {
+        if activeOnly {
+            let predicate = #Predicate<StoredGroupMember> {
+                $0.groupID == groupID && $0.isActive == true
+            }
+            let descriptor = FetchDescriptor<StoredGroupMember>(predicate: predicate)
+            return try modelContext.fetch(descriptor).map { $0.toDTO() }
+        }
+
+        let predicate = #Predicate<StoredGroupMember> { $0.groupID == groupID }
+        let descriptor = FetchDescriptor<StoredGroupMember>(predicate: predicate)
+        return try modelContext.fetch(descriptor).map { $0.toDTO() }
     }
 
     // MARK: - Peers
@@ -154,8 +347,7 @@ final class PigeonStore {
             existing.isSaved = peer.isSaved
             existing.lastSeen = peer.lastSeen
         } else {
-            let stored = StoredPeer(from: peer)
-            modelContext.insert(stored)
+            modelContext.insert(StoredPeer(from: peer))
         }
 
         try modelContext.save()
@@ -174,6 +366,29 @@ final class PigeonStore {
         try modelContext.delete(model: StoredMessage.self)
         try modelContext.delete(model: StoredConversation.self)
         try modelContext.delete(model: StoredPeer.self)
+        try modelContext.delete(model: StoredReaction.self)
+        try modelContext.delete(model: StoredGroup.self)
+        try modelContext.delete(model: StoredGroupMember.self)
         try modelContext.save()
+    }
+
+    // MARK: - Private
+
+    private func fetchStoredMessage(id: UUID) throws -> StoredMessage? {
+        let predicate = #Predicate<StoredMessage> { $0.id == id }
+        let descriptor = FetchDescriptor<StoredMessage>(predicate: predicate)
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func fetchStoredConversation(id: UUID) throws -> StoredConversation? {
+        let predicate = #Predicate<StoredConversation> { $0.id == id }
+        let descriptor = FetchDescriptor<StoredConversation>(predicate: predicate)
+        return try modelContext.fetch(descriptor).first
+    }
+
+    private func fetchStoredGroup(id: UUID) throws -> StoredGroup? {
+        let predicate = #Predicate<StoredGroup> { $0.id == id }
+        let descriptor = FetchDescriptor<StoredGroup>(predicate: predicate)
+        return try modelContext.fetch(descriptor).first
     }
 }
