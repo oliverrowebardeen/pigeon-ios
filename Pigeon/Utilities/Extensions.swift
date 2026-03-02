@@ -1,6 +1,31 @@
 import Foundation
 
 extension Data {
+    nonisolated init?(hexString: String) {
+        let cleaned = hexString
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        guard cleaned.count % 2 == 0 else {
+            return nil
+        }
+
+        var data = Data()
+        data.reserveCapacity(cleaned.count / 2)
+
+        var index = cleaned.startIndex
+        while index < cleaned.endIndex {
+            let nextIndex = cleaned.index(index, offsetBy: 2)
+            guard let byte = UInt8(cleaned[index ..< nextIndex], radix: 16) else {
+                return nil
+            }
+            data.append(byte)
+            index = nextIndex
+        }
+
+        self = data
+    }
+
     nonisolated var hexEncodedString: String {
         map { String(format: "%02x", $0) }.joined()
     }

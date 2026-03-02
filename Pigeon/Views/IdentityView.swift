@@ -6,6 +6,7 @@ struct IdentityView: View {
     @State private var displayName: String = ""
     @State private var showingQR = false
     @State private var copied = false
+    @State private var copiedProfileLink = false
 
     var body: some View {
         NavigationStack {
@@ -19,6 +20,7 @@ struct IdentityView: View {
                         publicKeySection
                         displayNameSection
                         qrButton
+                        profileLinkSection
                         privacyNote
                     }
                     .padding(.top, 32)
@@ -121,6 +123,38 @@ struct IdentityView: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(PigeonTheme.accent)
+    }
+
+    @ViewBuilder
+    private var profileLinkSection: some View {
+        if let profileURL = coordinator.makeProfileShareURL() {
+            VStack(spacing: 10) {
+                ShareLink(item: profileURL) {
+                    Label("Share Profile Link", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(PigeonTheme.accentDark)
+
+                Button {
+                    UIPasteboard.general.string = profileURL.absoluteString
+                    copiedProfileLink = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        copiedProfileLink = false
+                    }
+                } label: {
+                    Label(
+                        copiedProfileLink ? "Link Copied" : "Copy Profile Link",
+                        systemImage: copiedProfileLink ? "checkmark" : "link"
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered)
+                .tint(PigeonTheme.accent)
+            }
+        }
     }
 
     private var privacyNote: some View {

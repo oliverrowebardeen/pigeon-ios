@@ -514,6 +514,87 @@ final class AppCoordinator {
         return data.base64EncodedString()
     }
 
+    func makeProfileShareURL() -> URL? {
+        let payload = ProfileShareLink(
+            publicKeyHex: identity.publicKey.rawRepresentation.hexEncodedString,
+            pigeonID: identity.pigeonID,
+            displayName: identity.displayName
+        )
+
+        guard let data = try? Self.wireEncoder.encode(payload) else {
+            return nil
+        }
+
+        var components = URLComponents()
+        components.scheme = "pigeon"
+        components.host = "profile"
+        components.queryItems = [
+            URLQueryItem(name: "token", value: data.base64EncodedString())
+        ]
+
+        return components.url
+    }
+
+    @discardableResult
+    func consumeProfileShareURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "pigeon" else {
+            return false
+        }
+        guard url.host?.lowercased() == "profile" else {
+            return false
+        }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return false
+        }
+        guard let token = components.queryItems?.first(where: { $0.name == "token" })?.value else {
+            return false
+        }
+        guard let data = Data(base64Encoded: token) else {
+            return false
+        }
+        guard let payload = try? Self.wireDecoder.decode(ProfileShareLink.self, from: data) else {
+            return false
+        }
+        guard payload.version == ProfileShareLink.version else {
+            return false
+        }
+        guard let publicKey = Data(hexString: payload.publicKeyHex) else {
+            return false
+        }
+
+        let myKey = identity.publicKey.rawRepresentation
+        if publicKey == myKey {
+            return true
+        }
+
+        let normalizedDisplayName: String? = {
+            guard let payloadName = payload.displayName else { return nil }
+            let trimmed = payloadName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }()
+
+        let peer = Peer(
+            publicKey: publicKey,
+            displayName: normalizedDisplayName,
+            rssi: nil,
+            firstSeen: Date(),
+            lastSeen: Date(),
+            isSaved: true
+        )
+
+        do {
+            try store.savePeer(peer)
+            _ = try store.getOrCreateConversation(for: peer)
+            markMessagesChanged()
+            Task {
+                await loadConversations()
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func consumeGroupInviteTokenString(_ tokenString: String) throws -> Conversation {
         guard let data = Data(base64Encoded: tokenString) else {
             throw AppCoordinatorError.invalidWirePayload

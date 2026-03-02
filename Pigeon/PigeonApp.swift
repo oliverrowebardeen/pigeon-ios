@@ -41,6 +41,9 @@ struct PigeonApp: App {
                         break
                     }
                 }
+                .onOpenURL { url in
+                    _ = coordinator.consumeProfileShareURL(url)
+                }
         }
     }
 }
