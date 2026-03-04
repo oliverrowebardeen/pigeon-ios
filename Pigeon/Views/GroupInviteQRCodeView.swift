@@ -10,8 +10,10 @@ struct GroupInviteQRCodeView: View {
     let groupID: UUID
 
     @State private var tokenString: String = ""
+    @State private var inviteURL: URL?
     @State private var loadError: String?
-    @State private var copied = false
+    @State private var copiedToken = false
+    @State private var copiedLink = false
     @State private var showScanner = false
     @State private var scanResultMessage: String?
 
@@ -25,7 +27,9 @@ struct GroupInviteQRCodeView: View {
                         .font(PigeonTheme.titleFont)
                         .foregroundColor(PigeonTheme.textPrimary)
 
-                    if let image = generateQRCode(from: tokenString), !tokenString.isEmpty {
+                    if let qrSource = qrCodeSource,
+                       let image = generateQRCode(from: qrSource)
+                    {
                         Image(uiImage: image)
                             .interpolation(.none)
                             .resizable()
@@ -46,29 +50,53 @@ struct GroupInviteQRCodeView: View {
                             .foregroundColor(PigeonTheme.textSecondary)
                     }
 
-                    HStack(spacing: 12) {
-                        Button {
-                            UIPasteboard.general.string = tokenString
-                            copied = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
-                                copied = false
+                    VStack(spacing: 10) {
+                        if let inviteURL {
+                            ShareLink(item: inviteURL) {
+                                Label("Share Invite Link", systemImage: "square.and.arrow.up")
+                                    .frame(maxWidth: .infinity)
                             }
-                        } label: {
-                            Label(copied ? "Copied" : "Copy Invite", systemImage: copied ? "checkmark" : "doc.on.doc")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(PigeonTheme.accent)
-                        .disabled(tokenString.isEmpty)
+                            .buttonStyle(.borderedProminent)
+                            .tint(PigeonTheme.accentDark)
 
-                        Button {
-                            showScanner = true
-                        } label: {
-                            Label("Scan Invite", systemImage: "qrcode.viewfinder")
-                                .frame(maxWidth: .infinity)
+                            Button {
+                                UIPasteboard.general.string = inviteURL.absoluteString
+                                copiedLink = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                                    copiedLink = false
+                                }
+                            } label: {
+                                Label(copiedLink ? "Link Copied" : "Copy Invite Link", systemImage: copiedLink ? "checkmark" : "link")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(PigeonTheme.accent)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(PigeonTheme.accent)
+
+                        HStack(spacing: 12) {
+                            Button {
+                                UIPasteboard.general.string = tokenString
+                                copiedToken = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                                    copiedToken = false
+                                }
+                            } label: {
+                                Label(copiedToken ? "Copied" : "Copy Invite Token", systemImage: copiedToken ? "checkmark" : "doc.on.doc")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(PigeonTheme.accent)
+                            .disabled(tokenString.isEmpty)
+
+                            Button {
+                                showScanner = true
+                            } label: {
+                                Label("Scan Invite", systemImage: "qrcode.viewfinder")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(PigeonTheme.accent)
+                        }
                     }
 
                     if let scanResultMessage {
@@ -92,6 +120,7 @@ struct GroupInviteQRCodeView: View {
             .task {
                 do {
                     tokenString = try coordinator.makeGroupInviteTokenString(groupID: groupID)
+                    inviteURL = try coordinator.makeGroupInviteURL(groupID: groupID)
                 } catch {
                     loadError = "Could not generate invite token."
                 }
@@ -105,6 +134,12 @@ struct GroupInviteQRCodeView: View {
     private var scannerSheet: some View {
         NavigationStack {
             QRCodeScannerView { code in
+                if let url = URL(string: code), coordinator.consumeGroupInviteURL(url) {
+                    scanResultMessage = "Invite accepted. Group added to conversations."
+                    showScanner = false
+                    return
+                }
+
                 do {
                     _ = try coordinator.consumeGroupInviteTokenString(code)
                     scanResultMessage = "Invite accepted. Group added to conversations."
@@ -139,5 +174,15 @@ struct GroupInviteQRCodeView: View {
         let scaled = outputImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
         return UIImage(cgImage: cgImage)
+    }
+
+    private var qrCodeSource: String? {
+        if let inviteURL {
+            return inviteURL.absoluteString
+        }
+        guard !tokenString.isEmpty else {
+            return nil
+        }
+        return tokenString
     }
 }

@@ -3,7 +3,7 @@ import CoreImage.CIFilterBuiltins
 import SwiftUI
 
 struct QRCodeSheet: View {
-    let publicKeyHex: String
+    let payloadString: String
     let pigeonID: String
 
     @Environment(\.dismiss) private var dismiss
@@ -17,7 +17,7 @@ struct QRCodeSheet: View {
                     .font(PigeonTheme.titleFont)
                     .foregroundColor(PigeonTheme.textPrimary)
 
-                if let image = generateQRCode(from: publicKeyHex) {
+                if let image = generateQRCode(from: payloadString) {
                     Image(uiImage: image)
                         .interpolation(.none)
                         .resizable()
@@ -31,7 +31,7 @@ struct QRCodeSheet: View {
                     .font(PigeonTheme.monoFont)
                     .foregroundColor(PigeonTheme.textSecondary)
 
-                Text("Other Pigeon users can scan this\nto add you as a contact.")
+                Text("Other Pigeon users can scan this\nto add your profile as a contact.")
                     .font(PigeonTheme.captionFont)
                     .foregroundColor(PigeonTheme.textTertiary)
                     .multilineTextAlignment(.center)

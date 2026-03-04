@@ -34,7 +34,8 @@ struct IdentityView: View {
             }
             .sheet(isPresented: $showingQR) {
                 QRCodeSheet(
-                    publicKeyHex: coordinator.identity.publicKey.rawRepresentation.hexEncodedString,
+                    payloadString: coordinator.makeProfileShareURL()?.absoluteString
+                        ?? coordinator.identity.publicKey.rawRepresentation.hexEncodedString,
                     pigeonID: coordinator.identity.pigeonID
                 )
             }

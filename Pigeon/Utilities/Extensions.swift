@@ -30,6 +30,28 @@ extension Data {
         map { String(format: "%02x", $0) }.joined()
     }
 
+    nonisolated var base64URLEncodedString: String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    nonisolated init?(base64URLEncoded string: String) {
+        let normalized = string
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+
+        let paddingLength = (4 - (normalized.count % 4)) % 4
+        let padded = normalized + String(repeating: "=", count: paddingLength)
+
+        guard let data = Data(base64Encoded: padded) else {
+            return nil
+        }
+
+        self = data
+    }
+
     nonisolated mutating func appendUInt16(_ value: UInt16) {
         append(UInt8((value & 0xFF00) >> 8))
         append(UInt8(value & 0x00FF))

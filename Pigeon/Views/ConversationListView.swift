@@ -45,12 +45,7 @@ struct ConversationListView: View {
             .sheet(isPresented: $showInviteScanner) {
                 NavigationStack {
                     QRCodeScannerView { code in
-                        do {
-                            _ = try coordinator.consumeGroupInviteTokenString(code)
-                            inviteResultMessage = "Invite accepted. Group added to messages."
-                        } catch {
-                            inviteResultMessage = "Invite invalid or expired."
-                        }
+                        handleScannedCode(code)
                         showInviteScanner = false
                     }
                     .ignoresSafeArea()
@@ -64,7 +59,7 @@ struct ConversationListView: View {
                     .toolbarColorScheme(.dark, for: .navigationBar)
                 }
             }
-            .alert("Group Invite", isPresented: inviteAlertBinding) {
+            .alert("Scan Result", isPresented: inviteAlertBinding) {
                 Button("OK", role: .cancel) {
                     inviteResultMessage = nil
                 }
@@ -111,6 +106,30 @@ struct ConversationListView: View {
             let conversation = coordinator.conversations[index]
             try? coordinator.deleteConversation(id: conversation.id)
         }
+    }
+
+    private func handleScannedCode(_ code: String) {
+        if coordinator.consumeProfileShareString(code) {
+            inviteResultMessage = "Profile added to your conversations."
+            return
+        }
+
+        if let url = URL(string: code), coordinator.consumeGroupInviteURL(url) {
+            inviteResultMessage = "Invite accepted. Group added to messages."
+            return
+        }
+
+        if (try? coordinator.consumeGroupInviteTokenString(code)) != nil {
+            inviteResultMessage = "Invite accepted. Group added to messages."
+            return
+        }
+
+        if coordinator.consumeLegacyProfilePublicKeyHex(code) {
+            inviteResultMessage = "Profile added to your conversations."
+            return
+        }
+
+        inviteResultMessage = "QR code is invalid or expired."
     }
 
     private var inviteAlertBinding: Binding<Bool> {

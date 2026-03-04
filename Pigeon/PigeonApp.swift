@@ -42,7 +42,10 @@ struct PigeonApp: App {
                     }
                 }
                 .onOpenURL { url in
-                    _ = coordinator.consumeProfileShareURL(url)
+                    if coordinator.consumeProfileShareURL(url) {
+                        return
+                    }
+                    _ = coordinator.consumeGroupInviteURL(url)
                 }
         }
     }

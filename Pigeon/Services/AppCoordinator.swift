@@ -514,6 +514,26 @@ final class AppCoordinator {
         return data.base64EncodedString()
     }
 
+    func makeGroupInviteURL(groupID: UUID) throws -> URL {
+        let token = try makeGroupInviteTokenString(groupID: groupID)
+        guard let tokenData = Data(base64Encoded: token) else {
+            throw AppCoordinatorError.invalidWirePayload
+        }
+
+        var components = URLComponents()
+        components.scheme = "pigeon"
+        components.host = "group-invite"
+        components.queryItems = [
+            URLQueryItem(name: "token", value: tokenData.base64URLEncodedString)
+        ]
+
+        guard let url = components.url else {
+            throw AppCoordinatorError.invalidWirePayload
+        }
+
+        return url
+    }
+
     func makeProfileShareURL() -> URL? {
         let payload = ProfileShareLink(
             publicKeyHex: identity.publicKey.rawRepresentation.hexEncodedString,
@@ -529,10 +549,55 @@ final class AppCoordinator {
         components.scheme = "pigeon"
         components.host = "profile"
         components.queryItems = [
-            URLQueryItem(name: "token", value: data.base64EncodedString())
+            URLQueryItem(name: "token", value: data.base64URLEncodedString)
         ]
 
         return components.url
+    }
+
+    @discardableResult
+    func consumeProfileShareString(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return false
+        }
+        guard let url = URL(string: trimmed) else {
+            return false
+        }
+        return consumeProfileShareURL(url)
+    }
+
+    @discardableResult
+    func consumeLegacyProfilePublicKeyHex(_ value: String) -> Bool {
+        guard let publicKey = Data(hexString: value) else {
+            return false
+        }
+
+        let myKey = identity.publicKey.rawRepresentation
+        if publicKey == myKey {
+            return true
+        }
+
+        let peer = Peer(
+            publicKey: publicKey,
+            displayName: nil,
+            rssi: nil,
+            firstSeen: Date(),
+            lastSeen: Date(),
+            isSaved: true
+        )
+
+        do {
+            try store.savePeer(peer)
+            _ = try store.getOrCreateConversation(for: peer)
+            markMessagesChanged()
+            Task {
+                await loadConversations()
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     @discardableResult
@@ -540,7 +605,9 @@ final class AppCoordinator {
         guard url.scheme?.lowercased() == "pigeon" else {
             return false
         }
-        guard url.host?.lowercased() == "profile" else {
+        let host = url.host?.lowercased()
+        let path = url.path.lowercased()
+        guard host == "profile" || path == "/profile" else {
             return false
         }
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
@@ -549,7 +616,8 @@ final class AppCoordinator {
         guard let token = components.queryItems?.first(where: { $0.name == "token" })?.value else {
             return false
         }
-        guard let data = Data(base64Encoded: token) else {
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = Data(base64URLEncoded: trimmedToken) ?? Data(base64Encoded: trimmedToken) else {
             return false
         }
         guard let payload = try? Self.wireDecoder.decode(ProfileShareLink.self, from: data) else {
@@ -595,8 +663,35 @@ final class AppCoordinator {
         }
     }
 
+    @discardableResult
+    func consumeGroupInviteURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "pigeon" else {
+            return false
+        }
+
+        let host = url.host?.lowercased()
+        let path = url.path.lowercased()
+        guard host == "group-invite" || path == "/group-invite" else {
+            return false
+        }
+
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let token = components.queryItems?.first(where: { $0.name == "token" })?.value
+        else {
+            return false
+        }
+
+        do {
+            _ = try consumeGroupInviteTokenString(token)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func consumeGroupInviteTokenString(_ tokenString: String) throws -> Conversation {
-        guard let data = Data(base64Encoded: tokenString) else {
+        let trimmed = tokenString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = Data(base64URLEncoded: trimmed) ?? Data(base64Encoded: trimmed) else {
             throw AppCoordinatorError.invalidWirePayload
         }
 
@@ -995,10 +1090,24 @@ final class AppCoordinator {
     }
 
     private func handleIncomingDirectReaction(_ payload: WirePayloadV2) throws {
-        guard let reactionPayload = payload.directReaction,
-              let conversationID = payload.conversationID
-        else {
+        guard let reactionPayload = payload.directReaction else {
             throw AppCoordinatorError.invalidWirePayload
+        }
+
+        let conversationID: UUID
+        if let targetMessage = try store.fetchMessage(id: reactionPayload.targetMessageID) {
+            conversationID = targetMessage.conversationID
+        } else {
+            let senderPeer = Peer(
+                publicKey: payload.senderPublicKey,
+                displayName: nearbyPeers.first(where: { $0.publicKey == payload.senderPublicKey })?.displayName,
+                firstSeen: Date(),
+                lastSeen: Date(),
+                isSaved: false
+            )
+
+            let conversation = try store.getOrCreateConversation(for: senderPeer)
+            conversationID = conversation.id
         }
 
         if reactionPayload.isRemoval {

@@ -50,6 +50,17 @@ struct GroupDetailsView: View {
                                 Text(member.role == .owner ? "Owner" : "Member")
                                     .font(PigeonTheme.captionFont)
                                     .foregroundColor(PigeonTheme.textSecondary)
+
+                                if canRemove(member: member) {
+                                    Button(role: .destructive) {
+                                        remove(member)
+                                    } label: {
+                                        Image(systemName: "person.fill.xmark")
+                                            .font(.system(size: 14, weight: .semibold))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .padding(.leading, 8)
+                                }
                             }
                             .listRowBackground(PigeonTheme.surface)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {

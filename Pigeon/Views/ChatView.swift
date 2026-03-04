@@ -1,5 +1,6 @@
 import CryptoKit
 import SwiftUI
+import UIKit
 
 struct ChatView: View {
     @Environment(AppCoordinator.self) private var coordinator
@@ -12,7 +13,6 @@ struct ChatView: View {
     @State private var pendingWarning: PeerKeyChangeWarning?
     @State private var replyTarget: Message?
     @State private var selectedReactionMessage: Message?
-    @State private var showReactionPicker = false
     @State private var showGroupDetails = false
 
     var body: some View {
@@ -63,18 +63,6 @@ struct ChatView: View {
                 "\(warning.displayName) was previously trusted as \(warning.previousPigeonID), but is now advertising \(warning.currentPigeonID). Sending is paused until you confirm this key change."
             )
         }
-        .confirmationDialog(
-            "React",
-            isPresented: $showReactionPicker,
-            titleVisibility: .visible
-        ) {
-            ForEach(TapbackType.allCases, id: \.self) { tapback in
-                Button(tapback.shortLabel) {
-                    react(with: tapback)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
         .sheet(isPresented: $showGroupDetails) {
             if let groupID = conversation.groupID {
                 GroupDetailsView(groupID: groupID)
@@ -88,30 +76,51 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(messages) { message in
-                        MessageBubbleView(
-                            message: message,
-                            senderName: senderName(for: message.senderPublicKey),
-                            isGroupConversation: conversation.kind == .group,
-                            reactionSummaries: reactionSummaries(for: message.id),
-                            onDoubleTap: { quickReact(to: message) },
-                            onLongPress: {
-                                selectedReactionMessage = message
-                                showReactionPicker = true
-                            },
-                            onSwipeReply: { replyTarget = message },
-                            onTapReplyPreview: {
-                                guard let replyID = message.replyToMessageID else { return }
-                                withAnimation(.easeOut(duration: 0.2)) {
-                                    proxy.scrollTo(replyID, anchor: .center)
-                                }
+                        VStack(spacing: 4) {
+                            if selectedReactionMessage?.id == message.id {
+                                reactionPickerRow(for: message)
+                                    .transition(.scale(scale: 0.92).combined(with: .opacity))
                             }
-                        )
+
+                            MessageBubbleView(
+                                message: message,
+                                senderName: senderName(for: message.senderPublicKey),
+                                isGroupConversation: conversation.kind == .group,
+                                reactionSummaries: reactionSummaries(for: message.id),
+                                onDoubleTap: { quickReact(to: message) },
+                                onLongPress: {
+                                    withAnimation(.spring(response: 0.2, dampingFraction: 0.86)) {
+                                        selectedReactionMessage = message
+                                    }
+                                },
+                                onSwipeReply: {
+                                    replyTarget = message
+                                    withAnimation(.spring(response: 0.2, dampingFraction: 0.9)) {
+                                        selectedReactionMessage = nil
+                                    }
+                                },
+                                onTapReplyPreview: {
+                                    guard let replyID = message.replyToMessageID else { return }
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        proxy.scrollTo(replyID, anchor: .center)
+                                    }
+                                }
+                            )
+                        }
                         .id(message.id)
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
             }
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    guard selectedReactionMessage != nil else { return }
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        selectedReactionMessage = nil
+                    }
+                }
+            )
             .onChange(of: messages.count) {
                 if let lastID = messages.last?.id {
                     withAnimation(.easeOut(duration: 0.2)) {
@@ -268,19 +277,59 @@ struct ChatView: View {
     }
 
     private func quickReact(to message: Message) {
+        playLightHaptic()
         Task {
             try? await coordinator.sendReaction(.like, to: message, in: conversation)
             loadMessagesAndReactions()
         }
     }
 
-    private func react(with tapback: TapbackType) {
-        guard let message = selectedReactionMessage else { return }
-        selectedReactionMessage = nil
+    private func react(with tapback: TapbackType, to message: Message) {
+        if shouldTriggerAdditionHaptic(tapback: tapback, for: message) {
+            playLightHaptic()
+        }
+
+        withAnimation(.easeOut(duration: 0.15)) {
+            selectedReactionMessage = nil
+        }
 
         Task {
             try? await coordinator.sendReaction(tapback, to: message, in: conversation)
             loadMessagesAndReactions()
+        }
+    }
+
+    private func reactionPickerRow(for message: Message) -> some View {
+        HStack {
+            if !message.isIncoming {
+                Spacer(minLength: 60)
+            }
+
+            HStack(spacing: 10) {
+                ForEach(TapbackType.allCases, id: \.self) { tapback in
+                    Button {
+                        react(with: tapback, to: message)
+                    } label: {
+                        Image(systemName: tapback.symbolName)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(PigeonTheme.textPrimary)
+                            .frame(width: 30, height: 30)
+                            .background(PigeonTheme.surfaceSecondary, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(PigeonTheme.surface, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(PigeonTheme.divider, lineWidth: 1)
+            }
+
+            if message.isIncoming {
+                Spacer(minLength: 60)
+            }
         }
     }
 
@@ -303,6 +352,16 @@ struct ChatView: View {
                 includesCurrentUser: entries.contains(where: { $0.reactorPublicKey == myKey })
             )
         }
+    }
+
+    private func shouldTriggerAdditionHaptic(tapback: TapbackType, for message: Message) -> Bool {
+        let myKey = coordinator.identity.publicKey.rawRepresentation
+        let existing = reactionsByMessage[message.id]?.first(where: { $0.reactorPublicKey == myKey })
+        return existing?.tapback != tapback
+    }
+
+    private func playLightHaptic() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     private var warningBinding: Binding<Bool> {
