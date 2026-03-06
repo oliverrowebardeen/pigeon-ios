@@ -5,8 +5,10 @@ struct MessageBubbleView: View {
     let senderName: String
     let isGroupConversation: Bool
     let reactionSummaries: [ReactionSummary]
+    let showsActionMenu: Bool
     let onDoubleTap: () -> Void
     let onLongPress: () -> Void
+    let onCopy: () -> Void
     let onSwipeReply: () -> Void
     let onTapReplyPreview: () -> Void
     @State private var swipeOffset: CGFloat = 0
@@ -29,6 +31,10 @@ struct MessageBubbleView: View {
                     .onTapGesture(count: 2, perform: onDoubleTap)
                     .onLongPressGesture(perform: onLongPress)
                     .highPriorityGesture(replyDragGesture)
+
+                if showsActionMenu {
+                    messageActionRow
+                }
 
                 HStack(spacing: 4) {
                     Text(message.timestamp, style: .time)
@@ -81,9 +87,10 @@ struct MessageBubbleView: View {
             .buttonStyle(.plain)
         }
 
-        Text(message.plaintext)
+        Text(formattedMessageText)
             .font(PigeonTheme.bodyFont)
             .foregroundColor(PigeonTheme.textPrimary)
+            .tint(message.isIncoming ? PigeonTheme.accent : PigeonTheme.textPrimary)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(
@@ -108,6 +115,56 @@ struct MessageBubbleView: View {
             }
             .padding(.horizontal, 4)
         }
+    }
+
+    private var messageActionRow: some View {
+        HStack {
+            if !message.isIncoming {
+                Spacer(minLength: 60)
+            }
+
+            Button {
+                onCopy()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Copy")
+                        .font(PigeonTheme.captionFont.weight(.semibold))
+                }
+                .foregroundColor(PigeonTheme.textPrimary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(PigeonTheme.surfaceSecondary, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            if message.isIncoming {
+                Spacer(minLength: 60)
+            }
+        }
+    }
+
+    private var formattedMessageText: AttributedString {
+        var attributed = AttributedString(message.plaintext)
+        let nsRange = NSRange(message.plaintext.startIndex..<message.plaintext.endIndex, in: message.plaintext)
+
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return attributed
+        }
+
+        for match in detector.matches(in: message.plaintext, range: nsRange) {
+            guard let url = match.url,
+                  let range = Range(match.range, in: attributed)
+            else {
+                continue
+            }
+
+            attributed[range].link = url
+            attributed[range].underlineStyle = Text.LineStyle(pattern: .solid)
+        }
+
+        return attributed
     }
 
     private var replyDragGesture: some Gesture {

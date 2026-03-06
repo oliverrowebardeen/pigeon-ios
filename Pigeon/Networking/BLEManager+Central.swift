@@ -18,6 +18,7 @@ extension BLEManager: CBCentralManagerDelegate {
             peerPeripheralMap.removeAll()
             peripheralMessageChars.removeAll()
             peripheralACKChars.removeAll()
+            peripheralBridgeControlChars.removeAll()
             lastConnectAttemptAt.removeAll()
             nearbyPeers.removeAll()
         default:
@@ -106,6 +107,7 @@ extension BLEManager: CBCentralManagerDelegate {
         peripheralPeerMap.removeValue(forKey: peripheralID)
         peripheralMessageChars.removeValue(forKey: peripheralID)
         peripheralACKChars.removeValue(forKey: peripheralID)
+        peripheralBridgeControlChars.removeValue(forKey: peripheralID)
 
         // Attempt reconnection immediately so iOS can wake us on reconnection events while locked.
         if central.state == .poweredOn {
@@ -146,7 +148,12 @@ extension BLEManager: CBPeripheralDelegate {
 
         for service in services where service.uuid == BLEConstants.serviceUUID {
             peripheral.discoverCharacteristics(
-                [BLEConstants.identityCharUUID, BLEConstants.messageCharUUID, BLEConstants.ackCharUUID],
+                [
+                    BLEConstants.identityCharUUID,
+                    BLEConstants.messageCharUUID,
+                    BLEConstants.ackCharUUID,
+                    BLEConstants.bridgeControlCharUUID,
+                ],
                 for: service
             )
         }
@@ -175,6 +182,10 @@ extension BLEManager: CBPeripheralDelegate {
                 peripheralACKChars[peripheralID] = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
 
+            case BLEConstants.bridgeControlCharUUID:
+                peripheralBridgeControlChars[peripheralID] = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+
             default:
                 break
             }
@@ -197,6 +208,9 @@ extension BLEManager: CBPeripheralDelegate {
 
         case BLEConstants.ackCharUUID:
             handleReceivedACK(data)
+
+        case BLEConstants.bridgeControlCharUUID:
+            processIncomingBridgeChunk(data, source: .peripheral(peripheral.identifier))
 
         default:
             break
@@ -239,7 +253,11 @@ extension BLEManager: CBPeripheralDelegate {
                 rssi: nil,
                 firstSeen: nearbyPeers[payload.publicKey]?.firstSeen ?? now,
                 lastSeen: now,
-                isSaved: nearbyPeers[payload.publicKey]?.isSaved ?? false
+                isSaved: nearbyPeers[payload.publicKey]?.isSaved ?? false,
+                bridgeProtocolVersion: payload.bridgeProtocolVersion,
+                bridgeEnabled: payload.bridgeEnabled ?? false,
+                relayReachable: payload.relayReachable ?? false,
+                bridgeCapacityRemaining: payload.bridgeCapacityRemaining
             )
 
             let isNew = nearbyPeers[payload.publicKey] == nil

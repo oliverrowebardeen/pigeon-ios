@@ -12,4 +12,8 @@ nonisolated struct Peer: Identifiable, Hashable, Sendable {
     var firstSeen: Date
     var lastSeen: Date
     var isSaved: Bool
+    var bridgeProtocolVersion: Int? = nil
+    var bridgeEnabled: Bool = false
+    var relayReachable: Bool = false
+    var bridgeCapacityRemaining: Int? = nil
 }

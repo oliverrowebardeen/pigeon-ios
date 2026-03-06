@@ -28,11 +28,19 @@ nonisolated enum InboundSource: Sendable {
     case relay
 }
 
+nonisolated enum DirectConversationReachability: Sendable {
+    case inRange
+    case connectedToInternet
+    case outOfRange
+}
+
 @Observable
 @MainActor
 final class AppCoordinator {
     private static let dataModelVersionDefaultsKey = "pigeon.dataModelVersion"
     private static let currentDataModelVersion = 2
+    private static let internetBridgeEnabledDefaultsKey = "pigeon.settings.internetBridgeEnabled"
+    private static let legacyMeshRelayDefaultsKey = "pigeon.settings.meshRelay"
 
     private static let wireEncoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -54,18 +62,23 @@ final class AppCoordinator {
     let router: MeshRouter
     private let keyStore: KeyStore
     let relayClient: InternetRelayClient?
+    let bridgeTunnelBroker: BridgeTunnelBroker?
     let relayURL: URL?
 
     var conversations: [Conversation] = []
     var nearbyPeers: [Peer] = []
     var bleState: BLEManager.State = .idle
     var transportState: TransportState = .bleOnly
+    var activeBridge: BridgeCandidate?
+    var presentedContactProfile: Peer?
     var relayPushTokenRegistered = false
+    var internetBridgeEnabled: Bool
     private(set) var messageChangeToken = 0
 
     private let deliveryQueueTimeoutNanoseconds: UInt64 = 20_000_000_000
     private let maxGroupMembers = 16
     private var deliveryTimeoutTasks: [UUID: Task<Void, Never>] = [:]
+    private var activeConversationID: UUID?
 
     private var didStartBLE = false
     private var didStartRelay = false
@@ -76,8 +89,10 @@ final class AppCoordinator {
 
     init(store: PigeonStore) throws {
         let identity = try PigeonIdentity.loadOrCreate()
+        let initialInternetBridgeEnabled = Self.loadInternetBridgeEnabled()
         self.identity = identity
         self.store = store
+        internetBridgeEnabled = initialInternetBridgeEnabled
         crypto = CryptoManager()
         groupCrypto = GroupCryptoManager()
         router = MeshRouter()
@@ -91,12 +106,36 @@ final class AppCoordinator {
 
         relayURL = Self.relayWebSocketURL()
         if let relayURL {
-            relayClient = InternetRelayClient(identity: identity, relayURL: relayURL)
+            relayClient = InternetRelayClient(
+                identity: identity,
+                relayURL: relayURL,
+                bridgeFallbackEnabled: initialInternetBridgeEnabled,
+                sendBridgeFrame: { [bleManager] peerPublicKey, frame in
+                    try await MainActor.run {
+                        try bleManager.sendBridgeFrame(frame, to: peerPublicKey)
+                    }
+                }
+            )
+            bridgeTunnelBroker = BridgeTunnelBroker(
+                relayURL: relayURL,
+                sendBridgeFrame: { [bleManager] peerPublicKey, frame in
+                    try await MainActor.run {
+                        try bleManager.sendBridgeFrame(frame, to: peerPublicKey)
+                    }
+                }
+            )
             transportState = .internetDisconnected
         } else {
             relayClient = nil
+            bridgeTunnelBroker = nil
             transportState = .bleOnly
         }
+
+        bleManager.updateBridgeAvailability(
+            enabled: initialInternetBridgeEnabled,
+            relayReachable: false,
+            capacityRemaining: nil
+        )
 
         try performOneTimeDataResetIfNeeded()
     }
@@ -384,12 +423,38 @@ final class AppCoordinator {
         Task { await loadConversations() }
     }
 
+    func setActiveConversation(_ conversationID: UUID?) {
+        activeConversationID = conversationID
+        guard let conversationID else { return }
+
+        try? store.clearUnreadCount(conversationID: conversationID)
+        Task { await loadConversations() }
+    }
+
+    func presentContactProfile(_ peer: Peer) {
+        presentedContactProfile = resolvedPeer(for: peer.publicKey) ?? peer
+    }
+
+    func dismissPresentedContactProfile() {
+        presentedContactProfile = nil
+    }
+
     func didRegisterRemoteDeviceToken(_ token: Data) {
         relayPushTokenRegistered = true
         guard let relayClient else { return }
 
         Task {
             await relayClient.registerPushToken(token)
+        }
+    }
+
+    func setInternetBridgeEnabled(_ enabled: Bool, userDefaults: UserDefaults = .standard) {
+        guard internetBridgeEnabled != enabled else { return }
+        internetBridgeEnabled = enabled
+        userDefaults.set(enabled, forKey: Self.internetBridgeEnabledDefaultsKey)
+        Task {
+            await relayClient?.setBridgeFallbackEnabled(enabled)
+            await refreshBridgeHostAvailability()
         }
     }
 
@@ -402,6 +467,153 @@ final class AppCoordinator {
 
     func isPeerNearby(publicKey: Data) -> Bool {
         nearbyPeers.contains(where: { $0.publicKey == publicKey })
+    }
+
+    private func canAttemptBLEMeshDelivery(to recipientPublicKey: Data) -> Bool {
+        isPeerNearby(publicKey: recipientPublicKey) || !nearbyPeers.isEmpty
+    }
+
+    func resolvedPeer(for publicKey: Data) -> Peer? {
+        let savedPeer = savedPeer(for: publicKey)
+        if var nearbyPeer = nearbyPeers.first(where: { $0.publicKey == publicKey }) {
+            if let savedPeer {
+                nearbyPeer.displayName = savedPeer.displayName ?? nearbyPeer.displayName
+                nearbyPeer.firstSeen = savedPeer.firstSeen
+                nearbyPeer.lastSeen = max(savedPeer.lastSeen, nearbyPeer.lastSeen)
+                nearbyPeer.isSaved = savedPeer.isSaved
+            }
+            return nearbyPeer
+        }
+
+        if let savedPeer {
+            return savedPeer
+        }
+
+        if let directConversation = conversations.first(where: { $0.kind == .direct && $0.peerPublicKey == publicKey }) {
+            return Peer(
+                publicKey: publicKey,
+                displayName: directConversation.peerDisplayName,
+                rssi: nil,
+                firstSeen: directConversation.lastMessageTimestamp ?? Date(),
+                lastSeen: directConversation.lastMessageTimestamp ?? Date(),
+                isSaved: true
+            )
+        }
+
+        return nil
+    }
+
+    func renameContact(publicKey: Data, displayName: String?) throws {
+        let trimmedDisplayName: String? = {
+            guard let displayName else { return nil }
+            let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }()
+
+        let existingPeer = resolvedPeer(for: publicKey) ?? Peer(
+            publicKey: publicKey,
+            displayName: trimmedDisplayName,
+            rssi: nil,
+            firstSeen: Date(),
+            lastSeen: Date(),
+            isSaved: true
+        )
+
+        let updatedPeer = Peer(
+            publicKey: existingPeer.publicKey,
+            displayName: trimmedDisplayName,
+            rssi: existingPeer.rssi,
+            firstSeen: existingPeer.firstSeen,
+            lastSeen: Date(),
+            isSaved: true,
+            bridgeProtocolVersion: existingPeer.bridgeProtocolVersion,
+            bridgeEnabled: existingPeer.bridgeEnabled,
+            relayReachable: existingPeer.relayReachable,
+            bridgeCapacityRemaining: existingPeer.bridgeCapacityRemaining
+        )
+
+        try store.savePeer(updatedPeer)
+        try store.updateConversationPeerName(peerPublicKey: publicKey, displayName: trimmedDisplayName)
+
+        if let peerIndex = nearbyPeers.firstIndex(where: { $0.publicKey == publicKey }) {
+            nearbyPeers[peerIndex].displayName = trimmedDisplayName
+            nearbyPeers[peerIndex].isSaved = true
+            nearbyPeers[peerIndex].lastSeen = Date()
+        }
+
+        if let conversationIndex = conversations.firstIndex(where: {
+            $0.kind == .direct && $0.peerPublicKey == publicKey
+        }) {
+            conversations[conversationIndex].peerDisplayName = trimmedDisplayName
+        }
+
+        markMessagesChanged()
+        Task { await loadConversations() }
+    }
+
+    func contactPeers() -> [Peer] {
+        var peersByKey: [Data: Peer] = [:]
+
+        for peer in (try? store.fetchSavedPeers()) ?? [] {
+            peersByKey[peer.publicKey] = peer
+        }
+
+        for conversation in conversations where conversation.kind == .direct {
+            guard let key = conversation.peerPublicKey else { continue }
+            if peersByKey[key] == nil {
+                peersByKey[key] = Peer(
+                    publicKey: key,
+                    displayName: conversation.peerDisplayName,
+                    rssi: nil,
+                    firstSeen: conversation.lastMessageTimestamp ?? Date(),
+                    lastSeen: conversation.lastMessageTimestamp ?? Date(),
+                    isSaved: true
+                )
+            }
+        }
+
+        for peer in nearbyPeers where peer.isSaved || peersByKey[peer.publicKey] != nil {
+            if let existing = peersByKey[peer.publicKey] {
+                peersByKey[peer.publicKey] = mergedNearbyPeer(peer, into: existing)
+            } else {
+                peersByKey[peer.publicKey] = peer
+            }
+        }
+
+        return peersByKey.values
+            .filter { $0.publicKey != identity.publicKey.rawRepresentation }
+            .sorted { lhs, rhs in
+                (lhs.displayName ?? lhs.pigeonID).localizedCaseInsensitiveCompare(rhs.displayName ?? rhs.pigeonID) == .orderedAscending
+            }
+    }
+
+    private func mergedNearbyPeer(_ nearbyPeer: Peer, into existingPeer: Peer) -> Peer {
+        var merged = existingPeer
+        merged.displayName = existingPeer.displayName ?? nearbyPeer.displayName
+        merged.rssi = nearbyPeer.rssi ?? existingPeer.rssi
+        merged.firstSeen = min(existingPeer.firstSeen, nearbyPeer.firstSeen)
+        merged.lastSeen = max(existingPeer.lastSeen, nearbyPeer.lastSeen)
+        merged.isSaved = existingPeer.isSaved || nearbyPeer.isSaved
+        merged.bridgeProtocolVersion = nearbyPeer.bridgeProtocolVersion ?? existingPeer.bridgeProtocolVersion
+        merged.bridgeEnabled = nearbyPeer.bridgeEnabled
+        merged.relayReachable = nearbyPeer.relayReachable
+        merged.bridgeCapacityRemaining = nearbyPeer.bridgeCapacityRemaining ?? existingPeer.bridgeCapacityRemaining
+        return merged
+    }
+
+    func directConversationReachability(for publicKey: Data?) -> DirectConversationReachability {
+        guard let publicKey else { return .outOfRange }
+
+        if isPeerNearby(publicKey: publicKey) {
+            return .inRange
+        }
+
+        switch transportState {
+        case .internetDirectConnected, .internetBridgedConnected:
+            return .connectedToInternet
+        case .bleOnly, .internetDisconnected:
+            return .outOfRange
+        }
     }
 
     func updateDisplayName(_ newValue: String?) {
@@ -590,6 +802,7 @@ final class AppCoordinator {
         do {
             try store.savePeer(peer)
             _ = try store.getOrCreateConversation(for: peer)
+            presentContactProfile(peer)
             markMessagesChanged()
             Task {
                 await loadConversations()
@@ -653,6 +866,7 @@ final class AppCoordinator {
         do {
             try store.savePeer(peer)
             _ = try store.getOrCreateConversation(for: peer)
+            presentContactProfile(peer)
             markMessagesChanged()
             Task {
                 await loadConversations()
@@ -750,7 +964,7 @@ final class AppCoordinator {
             return identity.displayName ?? identity.pigeonID
         }
 
-        if let peer = nearbyPeers.first(where: { $0.publicKey == publicKey }) {
+        if let peer = resolvedPeer(for: publicKey) {
             return peer.displayName ?? peer.pigeonID
         }
 
@@ -759,6 +973,10 @@ final class AppCoordinator {
         }
 
         return PigeonIdentity.makePigeonID(fromPublicKeyData: publicKey)
+    }
+
+    private func savedPeer(for publicKey: Data) -> Peer? {
+        (try? store.fetchSavedPeers())?.first(where: { $0.publicKey == publicKey })
     }
 
     private func sendDirectMessage(text: String, in conversation: Conversation, replyTo replyTarget: Message?) async throws -> Message {
@@ -806,7 +1024,7 @@ final class AppCoordinator {
                 timestamp: message.timestamp
             )
 
-            let usedInternetRelay = await sendViaInternetRelayOrFallbackToBLE(
+            let usedInternetRelay = await sendViaAvailableTransports(
                 envelope,
                 recipientPublicKey: recipientKey
             )
@@ -1008,7 +1226,7 @@ final class AppCoordinator {
             let decrypted = try crypto.decrypt(envelope: envelope, recipientPrivateKey: identity.privateKey)
             let payload = try Self.wireDecoder.decode(WirePayloadV2.self, from: decrypted)
 
-            try await applyIncomingPayload(payload)
+            try await applyIncomingPayload(payload, source: source)
 
             // ACK only after successful decryption and processing
             if source == .ble {
@@ -1023,10 +1241,10 @@ final class AppCoordinator {
         }
     }
 
-    private func applyIncomingPayload(_ payload: WirePayloadV2) async throws {
+    private func applyIncomingPayload(_ payload: WirePayloadV2, source: InboundSource) async throws {
         switch payload.eventType {
         case .directText:
-            try handleIncomingDirectText(payload)
+            try handleIncomingDirectText(payload, source: source)
         case .directReaction:
             try handleIncomingDirectReaction(payload)
         case .groupKeyShare:
@@ -1034,7 +1252,7 @@ final class AppCoordinator {
         case .groupControl:
             try handleIncomingGroupControl(payload)
         case .groupMessage:
-            try handleIncomingGroupMessage(payload)
+            try handleIncomingGroupMessage(payload, source: source)
         case .groupReaction:
             try handleIncomingGroupReaction(payload)
         }
@@ -1043,7 +1261,7 @@ final class AppCoordinator {
         await loadConversations()
     }
 
-    private func handleIncomingDirectText(_ payload: WirePayloadV2) throws {
+    private func handleIncomingDirectText(_ payload: WirePayloadV2, source: InboundSource) throws {
         guard let directText = payload.directText else {
             throw AppCoordinatorError.invalidWirePayload
         }
@@ -1079,14 +1297,18 @@ final class AppCoordinator {
 
         try store.saveMessage(message)
         try store.updateConversationPreview(id: conversation.id, preview: message.plaintext, timestamp: message.timestamp)
-        try store.incrementUnreadCount(conversationID: conversation.id)
+        if shouldIncrementUnread(for: conversation.id) {
+            try store.incrementUnreadCount(conversationID: conversation.id)
+        }
 
-        let senderName = displayName(for: message.senderPublicKey)
-        NotificationManager.shared.showMessageNotification(
-            from: senderName,
-            preview: message.plaintext,
-            conversationID: conversation.id
-        )
+        if shouldShowLocalNotification(for: conversation.id, source: source) {
+            let senderName = displayName(for: message.senderPublicKey)
+            NotificationManager.shared.showMessageNotification(
+                from: senderName,
+                preview: message.plaintext,
+                conversationID: conversation.id
+            )
+        }
     }
 
     private func handleIncomingDirectReaction(_ payload: WirePayloadV2) throws {
@@ -1215,7 +1437,7 @@ final class AppCoordinator {
         try store.updateGroupConversationMetadata(groupID: control.groupID, groupName: group.name, memberCount: count)
     }
 
-    private func handleIncomingGroupMessage(_ payload: WirePayloadV2) throws {
+    private func handleIncomingGroupMessage(_ payload: WirePayloadV2, source: InboundSource) throws {
         guard let groupEncrypted = payload.groupEncrypted else {
             throw AppCoordinatorError.invalidWirePayload
         }
@@ -1260,13 +1482,35 @@ final class AppCoordinator {
 
         try store.saveMessage(message)
         try store.updateConversationPreview(id: conversation.id, preview: text.text, timestamp: payload.timestamp)
-        try store.incrementUnreadCount(conversationID: conversation.id)
+        if shouldIncrementUnread(for: conversation.id) {
+            try store.incrementUnreadCount(conversationID: conversation.id)
+        }
 
-        NotificationManager.shared.showMessageNotification(
-            from: displayName(for: payload.senderPublicKey),
-            preview: text.text,
-            conversationID: conversation.id
-        )
+        if shouldShowLocalNotification(for: conversation.id, source: source) {
+            NotificationManager.shared.showMessageNotification(
+                from: displayName(for: payload.senderPublicKey),
+                preview: text.text,
+                conversationID: conversation.id
+            )
+        }
+    }
+
+    private func isConversationActivelyVisible(_ conversationID: UUID) -> Bool {
+        UIApplication.shared.applicationState == .active && activeConversationID == conversationID
+    }
+
+    private func shouldIncrementUnread(for conversationID: UUID) -> Bool {
+        !isConversationActivelyVisible(conversationID)
+    }
+
+    private func shouldShowLocalNotification(
+        for conversationID: UUID,
+        source: InboundSource
+    ) -> Bool {
+        guard !isConversationActivelyVisible(conversationID) else {
+            return false
+        }
+        return true
     }
 
     private func handleIncomingGroupReaction(_ payload: WirePayloadV2) throws {
@@ -1334,7 +1578,7 @@ final class AppCoordinator {
             for (memberKey, envelope) in envelopes {
                 let isNearby = nearbyKeys.contains(memberKey)
                 group.addTask {
-                    let usedRelay = await self.sendViaInternetRelayOrFallbackToBLE(
+                    let usedRelay = await self.sendViaAvailableTransports(
                         envelope, recipientPublicKey: memberKey
                     )
                     return usedRelay || isNearby
@@ -1360,24 +1604,35 @@ final class AppCoordinator {
             messageID: UUID(),
             timestamp: payload.timestamp
         )
-        _ = await sendViaInternetRelayOrFallbackToBLE(envelope, recipientPublicKey: recipientPublicKey)
+        _ = await sendViaAvailableTransports(envelope, recipientPublicKey: recipientPublicKey)
     }
 
-    private func sendViaInternetRelayOrFallbackToBLE(
+    private func sendViaAvailableTransports(
         _ envelope: MessageEnvelope,
         recipientPublicKey: Data
     ) async -> Bool {
+        if isPeerNearby(publicKey: recipientPublicKey) {
+            bleManager.sendMessage(envelope, to: recipientPublicKey)
+            return false
+        }
+
+        let canUseBLEMesh = canAttemptBLEMeshDelivery(to: recipientPublicKey)
+        var usedRelay = false
+
         if let relayClient {
             do {
                 try await relayClient.sendEnvelope(envelope)
-                return true
+                usedRelay = true
             } catch {
-                // Fall back to BLE if relay is unavailable.
+                // Keep the BLE mesh path active even when relay delivery is unavailable.
             }
         }
 
-        bleManager.sendMessage(envelope, to: recipientPublicKey)
-        return false
+        if canUseBLEMesh || !usedRelay {
+            bleManager.sendMessage(envelope, to: recipientPublicKey)
+        }
+
+        return usedRelay
     }
 
     private func acknowledgeRelayMessage(_ messageID: UUID) async {
@@ -1507,6 +1762,56 @@ final class AppCoordinator {
         return "name.\(hash)"
     }
 
+    private func refreshBridgeCandidates() {
+        guard let relayClient else { return }
+
+        let candidates = nearbyPeers
+            .filter { $0.publicKey != identity.publicKey.rawRepresentation }
+            .map { peer in
+                BridgeCandidate(
+                    publicKey: peer.publicKey,
+                    pigeonID: peer.pigeonID,
+                    rssi: peer.rssi,
+                    relayReachable: peer.relayReachable,
+                    bridgeEnabled: peer.bridgeEnabled,
+                    capacityRemaining: peer.bridgeCapacityRemaining,
+                    lastStatusAt: peer.lastSeen
+                )
+            }
+
+        Task {
+            await relayClient.updateBridgeCandidates(candidates)
+        }
+    }
+
+    private func updateNearbyPeerBridgeStatus(_ payload: BridgeStatusPayload, from peerPublicKey: Data) {
+        guard let index = nearbyPeers.firstIndex(where: { $0.publicKey == peerPublicKey }) else {
+            return
+        }
+
+        nearbyPeers[index].bridgeProtocolVersion = payload.bridgeProtocolVersion
+        nearbyPeers[index].bridgeEnabled = payload.bridgeEnabled
+        nearbyPeers[index].relayReachable = payload.relayReachable
+        nearbyPeers[index].bridgeCapacityRemaining = payload.capacityRemaining
+        nearbyPeers[index].lastSeen = Date()
+        refreshBridgeCandidates()
+    }
+
+    private func refreshBridgeHostAvailability() async {
+        let relayReachable = transportState == .internetDirectConnected
+
+        if let bridgeTunnelBroker {
+            await bridgeTunnelBroker.setAcceptingConnections(internetBridgeEnabled && relayReachable)
+        }
+
+        let capacityRemaining = await bridgeTunnelBroker?.capacityRemaining
+        bleManager.updateBridgeAvailability(
+            enabled: internetBridgeEnabled,
+            relayReachable: relayReachable,
+            capacityRemaining: capacityRemaining
+        )
+    }
+
     private func activateBLEIfNeeded() {
         guard !didStartBLE else { return }
         didStartBLE = true
@@ -1527,6 +1832,7 @@ final class AppCoordinator {
         Task {
             await relayClient.setDelegate(self)
             await relayClient.start()
+            await refreshBridgeHostAvailability()
         }
     }
 
@@ -1571,7 +1877,7 @@ final class AppCoordinator {
                     timestamp: message.timestamp
                 )
 
-                let usedRelay = await sendViaInternetRelayOrFallbackToBLE(envelope, recipientPublicKey: recipientKey)
+                let usedRelay = await sendViaAvailableTransports(envelope, recipientPublicKey: recipientKey)
                 let updatedStatus: MessageStatus = usedRelay
                     ? .sent
                     : (isPeerNearby(publicKey: recipientKey) ? .sent : .queued)
@@ -1597,6 +1903,19 @@ final class AppCoordinator {
         }
         return URL(string: relayURLString)
     }
+
+    private static func loadInternetBridgeEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        if userDefaults.object(forKey: internetBridgeEnabledDefaultsKey) == nil,
+           let legacyValue = userDefaults.object(forKey: legacyMeshRelayDefaultsKey) as? Bool {
+            userDefaults.set(legacyValue, forKey: internetBridgeEnabledDefaultsKey)
+        }
+
+        if userDefaults.object(forKey: internetBridgeEnabledDefaultsKey) == nil {
+            userDefaults.set(true, forKey: internetBridgeEnabledDefaultsKey)
+        }
+
+        return userDefaults.bool(forKey: internetBridgeEnabledDefaultsKey)
+    }
 }
 
 // MARK: - BLEManagerDelegate
@@ -1608,12 +1927,28 @@ extension AppCoordinator: BLEManagerDelegate {
         }
     }
 
+    nonisolated func bleManager(_ manager: BLEManager, didReceiveBridgeFrame frame: BridgeControlFrame, from peerPublicKey: Data) {
+        Task { @MainActor in
+            await relayClient?.handleBridgeControlFrame(frame, from: peerPublicKey)
+            let didChangeBridgeAvailability = await bridgeTunnelBroker?.handle(frame, from: peerPublicKey) ?? false
+
+            if case .bridgeStatus(let payload) = frame.payload {
+                updateNearbyPeerBridgeStatus(payload, from: peerPublicKey)
+            }
+
+            if didChangeBridgeAvailability {
+                await refreshBridgeHostAvailability()
+            }
+        }
+    }
+
     nonisolated func bleManager(_ manager: BLEManager, didDiscoverPeer peer: Peer) {
         Task { @MainActor in
             updateTrustState(for: peer)
             if !nearbyPeers.contains(where: { $0.publicKey == peer.publicKey }) {
                 nearbyPeers.append(peer)
             }
+            refreshBridgeCandidates()
         }
     }
 
@@ -1625,12 +1960,17 @@ extension AppCoordinator: BLEManagerDelegate {
             } else {
                 nearbyPeers.append(peer)
             }
+            refreshBridgeCandidates()
         }
     }
 
     nonisolated func bleManager(_ manager: BLEManager, didLosePeer publicKey: Data) {
         Task { @MainActor in
             nearbyPeers.removeAll(where: { $0.publicKey == publicKey })
+            refreshBridgeCandidates()
+            await relayClient?.handleBridgePeerLoss(publicKey)
+            await bridgeTunnelBroker?.handlePeerLoss(publicKey)
+            await refreshBridgeHostAvailability()
         }
     }
 
@@ -1665,15 +2005,11 @@ extension AppCoordinator: BLEManagerDelegate {
 // MARK: - InternetRelayClientDelegate
 
 extension AppCoordinator: InternetRelayClientDelegate {
-    nonisolated func relayClientDidConnect() {
+    nonisolated func relayClientDidUpdateState(_ state: TransportState, activeBridge: BridgeCandidate?) {
         Task { @MainActor in
-            transportState = .internetConnected
-        }
-    }
-
-    nonisolated func relayClientDidDisconnect() {
-        Task { @MainActor in
-            transportState = relayClient == nil ? .bleOnly : .internetDisconnected
+            transportState = state
+            self.activeBridge = activeBridge
+            await refreshBridgeHostAvailability()
         }
     }
 
@@ -1686,6 +2022,7 @@ extension AppCoordinator: InternetRelayClientDelegate {
     nonisolated func relayClient(didReceiveDeliveryAck messageID: UUID) {
         Task { @MainActor in
             cancelDeliveryTimeout(for: messageID)
+            await router.acknowledgeDelivery(messageID)
             if let message = try? store.fetchMessage(id: messageID), message.groupID == nil {
                 try? store.updateMessageStatus(id: messageID, status: .delivered)
                 markMessagesChanged()

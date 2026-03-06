@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ConversationRowView: View {
     let conversation: Conversation
-    let isPeerNearby: Bool
+    let reachability: DirectConversationReachability?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -47,13 +47,16 @@ struct ConversationRowView: View {
                         .font(PigeonTheme.captionFont)
                         .foregroundColor(PigeonTheme.textSecondary)
                 } else {
-                    Circle()
-                        .fill(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
-                        .frame(width: 6, height: 6)
+                    if reachability != nil {
+                        Image(systemName: reachabilitySymbolName)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(reachabilityColor)
 
-                    Text(isPeerNearby ? "Nearby" : "Out of range")
-                        .font(PigeonTheme.captionFont)
-                        .foregroundColor(isPeerNearby ? PigeonTheme.success : PigeonTheme.error)
+                        Text(reachabilityLabel)
+                            .font(PigeonTheme.captionFont)
+                            .foregroundColor(reachabilityColor)
+                            .lineLimit(1)
+                    }
                 }
             }
 
@@ -81,5 +84,38 @@ struct ConversationRowView: View {
 
     private var avatarLetter: String {
         String((displayName).prefix(1)).uppercased()
+    }
+
+    private var reachabilityLabel: String {
+        switch reachability ?? .outOfRange {
+        case .inRange:
+            return "In Range"
+        case .connectedToInternet:
+            return "Connected to Internet"
+        case .outOfRange:
+            return "Out of Range"
+        }
+    }
+
+    private var reachabilityColor: Color {
+        switch reachability ?? .outOfRange {
+        case .inRange:
+            return PigeonTheme.success
+        case .connectedToInternet:
+            return PigeonTheme.internet
+        case .outOfRange:
+            return PigeonTheme.error
+        }
+    }
+
+    private var reachabilitySymbolName: String {
+        switch reachability ?? .outOfRange {
+        case .inRange:
+            return "antenna.radiowaves.left.and.right"
+        case .connectedToInternet:
+            return "globe"
+        case .outOfRange:
+            return "wifi.slash"
+        }
     }
 }

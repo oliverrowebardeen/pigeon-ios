@@ -37,7 +37,11 @@ extension BLEManager: CBPeripheralManagerDelegate {
             let payload = PeerIdentityPayload(
                 publicKey: identity.publicKey.rawRepresentation,
                 pigeonID: identity.pigeonID,
-                displayName: currentDisplayName
+                displayName: currentDisplayName,
+                bridgeProtocolVersion: BridgeProtocol.version,
+                bridgeEnabled: bridgeEnabled,
+                relayReachable: bridgeRelayReachable,
+                bridgeCapacityRemaining: bridgeCapacityRemaining
             )
 
             do {
@@ -76,6 +80,10 @@ extension BLEManager: CBPeripheralManagerDelegate {
                 handleReceivedACK(data)
                 peripheral.respond(to: request, withResult: .success)
 
+            case BLEConstants.bridgeControlCharUUID:
+                processIncomingBridgeChunk(data, source: .central(request.central))
+                peripheral.respond(to: request, withResult: .success)
+
             default:
                 peripheral.respond(to: request, withResult: .requestNotSupported)
             }
@@ -87,7 +95,9 @@ extension BLEManager: CBPeripheralManagerDelegate {
         central: CBCentral,
         didSubscribeTo characteristic: CBCharacteristic
     ) {
-        // A central subscribed to our notifications
+        if characteristic.uuid == BLEConstants.bridgeControlCharUUID {
+            subscribedBridgeCentrals[central.identifier] = central
+        }
     }
 
     func peripheralManager(
@@ -95,7 +105,10 @@ extension BLEManager: CBPeripheralManagerDelegate {
         central: CBCentral,
         didUnsubscribeFrom characteristic: CBCharacteristic
     ) {
-        // A central unsubscribed
+        if characteristic.uuid == BLEConstants.bridgeControlCharUUID {
+            subscribedBridgeCentrals.removeValue(forKey: central.identifier)
+            bridgePeerCentrals = bridgePeerCentrals.filter { $0.value.identifier != central.identifier }
+        }
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {
@@ -116,6 +129,8 @@ extension BLEManager: CBPeripheralManagerDelegate {
                             messageCharacteristic = mutable
                         case BLEConstants.ackCharUUID:
                             ackCharacteristic = mutable
+                        case BLEConstants.bridgeControlCharUUID:
+                            bridgeControlCharacteristic = mutable
                         default:
                             break
                         }

@@ -13,6 +13,7 @@ enum PigeonTheme {
     static let textSecondary = Color(hex: 0x8A8A8A)
     static let textTertiary = Color(hex: 0x6B7280)
     static let success = Color(hex: 0x4CAF50)
+    static let internet = Color(hex: 0x38BDF8)
     static let error = Color(hex: 0xEF5350)
     static let divider = Color(hex: 0x1F1F1F)
 

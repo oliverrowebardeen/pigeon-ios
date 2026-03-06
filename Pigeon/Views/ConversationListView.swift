@@ -3,6 +3,7 @@ import SwiftUI
 struct ConversationListView: View {
     @Environment(AppCoordinator.self) private var coordinator
     @State private var showNewGroupSheet = false
+    @State private var showContactsSheet = false
     @State private var showInviteScanner = false
     @State private var inviteResultMessage: String?
 
@@ -27,7 +28,13 @@ struct ConversationListView: View {
                         Image(systemName: "qrcode.viewfinder")
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        showContactsSheet = true
+                    } label: {
+                        Image(systemName: "person.crop.circle")
+                    }
+
                     Button {
                         showNewGroupSheet = true
                     } label: {
@@ -42,11 +49,17 @@ struct ConversationListView: View {
                 NewGroupView()
                     .environment(coordinator)
             }
+            .sheet(isPresented: $showContactsSheet) {
+                ContactsView()
+                    .environment(coordinator)
+            }
             .sheet(isPresented: $showInviteScanner) {
                 NavigationStack {
                     QRCodeScannerView { code in
-                        handleScannedCode(code)
                         showInviteScanner = false
+                        Task { @MainActor in
+                            handleScannedCode(code)
+                        }
                     }
                     .ignoresSafeArea()
                     .toolbar {
@@ -75,7 +88,9 @@ struct ConversationListView: View {
                 NavigationLink(value: conversation) {
                     ConversationRowView(
                         conversation: conversation,
-                        isPeerNearby: conversation.peerPublicKey.map { coordinator.isPeerNearby(publicKey: $0) } ?? false
+                        reachability: conversation.kind == .direct
+                            ? coordinator.directConversationReachability(for: conversation.peerPublicKey)
+                            : nil
                     )
                 }
                 .listRowBackground(PigeonTheme.background)
@@ -94,7 +109,7 @@ struct ConversationListView: View {
             Text("No conversations yet")
                 .font(PigeonTheme.headlineFont)
                 .foregroundColor(PigeonTheme.textSecondary)
-            Text("Tap Nearby to start direct chats\nor use the top-right button for groups.")
+            Text("Tap Nearby to start direct chats, scan a profile, or open Contacts from the top-right.")
                 .font(PigeonTheme.captionFont)
                 .foregroundColor(PigeonTheme.textTertiary)
                 .multilineTextAlignment(.center)
@@ -110,7 +125,6 @@ struct ConversationListView: View {
 
     private func handleScannedCode(_ code: String) {
         if coordinator.consumeProfileShareString(code) {
-            inviteResultMessage = "Profile added to your conversations."
             return
         }
 
@@ -125,7 +139,6 @@ struct ConversationListView: View {
         }
 
         if coordinator.consumeLegacyProfilePublicKeyHex(code) {
-            inviteResultMessage = "Profile added to your conversations."
             return
         }
 

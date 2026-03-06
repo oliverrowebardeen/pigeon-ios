@@ -6,6 +6,7 @@ nonisolated enum BLEConstants {
     static let messageCharUUID = CBUUID(string: "E1A71B10-9F11-4F1F-93F8-1A0D3A2B0002")
     static let identityCharUUID = CBUUID(string: "E1A71B10-9F11-4F1F-93F8-1A0D3A2B0003")
     static let ackCharUUID = CBUUID(string: "E1A71B10-9F11-4F1F-93F8-1A0D3A2B0004")
+    static let bridgeControlCharUUID = CBUUID(string: "E1A71B10-9F11-4F1F-93F8-1A0D3A2B0005")
 
     static let defaultTTL: UInt8 = 5
     static let connectionKeepAliveSeconds: TimeInterval = 30

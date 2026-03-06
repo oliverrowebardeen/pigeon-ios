@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MainTabView: View {
+    @Environment(AppCoordinator.self) private var coordinator
     @State private var selectedTab: Tab = .conversations
 
     enum Tab: Hashable {
@@ -30,5 +31,31 @@ struct MainTabView: View {
         }
         .tint(PigeonTheme.accent)
         .preferredColorScheme(.dark)
+        .onChange(of: coordinator.presentedContactProfile?.id) {
+            if coordinator.presentedContactProfile != nil {
+                selectedTab = .conversations
+            }
+        }
+        .sheet(item: presentedContactProfileBinding, onDismiss: {
+            coordinator.dismissPresentedContactProfile()
+        }) { peer in
+            NavigationStack {
+                ContactProfileView(peer: peer, showsDismissButton: true)
+                    .environment(coordinator)
+            }
+        }
+    }
+
+    private var presentedContactProfileBinding: Binding<Peer?> {
+        Binding(
+            get: { coordinator.presentedContactProfile },
+            set: { peer in
+                if let peer {
+                    coordinator.presentContactProfile(peer)
+                } else {
+                    coordinator.dismissPresentedContactProfile()
+                }
+            }
+        )
     }
 }

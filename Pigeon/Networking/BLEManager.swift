@@ -4,6 +4,7 @@ import Foundation
 
 protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didReceiveEnvelope envelope: MessageEnvelope)
+    func bleManager(_ manager: BLEManager, didReceiveBridgeFrame frame: BridgeControlFrame, from peerPublicKey: Data)
     func bleManager(_ manager: BLEManager, didDiscoverPeer peer: Peer)
     func bleManager(_ manager: BLEManager, didUpdatePeer peer: Peer)
     func bleManager(_ manager: BLEManager, didLosePeer publicKey: Data)
@@ -13,6 +14,10 @@ protocol BLEManagerDelegate: AnyObject {
 }
 
 final class BLEManager: NSObject {
+    enum BridgeSendError: Error {
+        case peerUnavailable
+    }
+
     enum State: Equatable {
         case idle
         case starting
@@ -46,6 +51,7 @@ final class BLEManager: NSObject {
     var messageCharacteristic: CBMutableCharacteristic!
     var identityCharacteristic: CBMutableCharacteristic!
     var ackCharacteristic: CBMutableCharacteristic!
+    var bridgeControlCharacteristic: CBMutableCharacteristic!
 
     // MARK: - Central role state
 
@@ -55,6 +61,7 @@ final class BLEManager: NSObject {
     var peerPeripheralMap: [Data: UUID] = [:]
     var peripheralMessageChars: [UUID: CBCharacteristic] = [:]
     var peripheralACKChars: [UUID: CBCharacteristic] = [:]
+    var peripheralBridgeControlChars: [UUID: CBCharacteristic] = [:]
     let reconnectDelaySeconds: TimeInterval = 1.0
     let reconnectAttemptIntervalSeconds: TimeInterval = 2.0
     var lastConnectAttemptAt: [UUID: Date] = [:]
@@ -69,12 +76,19 @@ final class BLEManager: NSObject {
     // MARK: - Reassembly
 
     var reassemblyBuffers: [UUID: ReassemblyBuffer] = [:]
+    var bridgeReassemblyBuffers: [UUID: ReassemblyBuffer] = [:]
+    var bridgePacketSources: [UUID: BridgePacketSource] = [:]
     private var reassemblyPurgeTimer: Timer?
 
     // MARK: - Nearby peers (live, in-memory)
 
     var nearbyPeers: [Data: Peer] = [:]
     var currentDisplayName: String?
+    var bridgeEnabled = true
+    var bridgeRelayReachable = false
+    var bridgeCapacityRemaining: Int?
+    var bridgePeerCentrals: [Data: CBCentral] = [:]
+    var subscribedBridgeCentrals: [UUID: CBCentral] = [:]
 
     // MARK: - Lifecycle
 
@@ -85,6 +99,11 @@ final class BLEManager: NSObject {
         self.store = store
         self.currentDisplayName = identity.displayName
         super.init()
+    }
+
+    enum BridgePacketSource {
+        case peripheral(UUID)
+        case central(CBCentral)
     }
 
     func start() {
@@ -132,9 +151,14 @@ final class BLEManager: NSObject {
         peerPeripheralMap.removeAll()
         peripheralMessageChars.removeAll()
         peripheralACKChars.removeAll()
+        peripheralBridgeControlChars.removeAll()
         lastConnectAttemptAt.removeAll()
         reassemblyBuffers.removeAll()
+        bridgeReassemblyBuffers.removeAll()
+        bridgePacketSources.removeAll()
         nearbyPeers.removeAll()
+        bridgePeerCentrals.removeAll()
+        subscribedBridgeCentrals.removeAll()
         state = .idle
     }
 
@@ -191,6 +215,55 @@ final class BLEManager: NSObject {
                 CBAdvertisementDataLocalNameKey: currentDisplayName ?? "Pigeon"
             ])
         }
+    }
+
+    func updateBridgeAvailability(enabled: Bool, relayReachable: Bool, capacityRemaining: Int?) {
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+            guard bridgeEnabled != enabled ||
+                bridgeRelayReachable != relayReachable ||
+                bridgeCapacityRemaining != capacityRemaining
+            else {
+                return
+            }
+            bridgeEnabled = enabled
+            bridgeRelayReachable = relayReachable
+            bridgeCapacityRemaining = capacityRemaining
+            broadcastBridgeStatusToPeers()
+        }
+    }
+
+    func sendBridgeFrame(_ frame: BridgeControlFrame, to peerPublicKey: Data) throws {
+        try bleQueue.sync {
+            try sendBridgeFrameLocked(frame, to: peerPublicKey)
+        }
+    }
+
+    private func sendBridgeFrameLocked(_ frame: BridgeControlFrame, to peerPublicKey: Data) throws {
+        let envelope = try BridgeProtocol.encrypt(
+            frame,
+            using: crypto,
+            senderPrivateKey: identity.privateKey,
+            recipientPublicKey: peerPublicKey
+        )
+        let chunks = try MessageProtocol.chunkEnvelope(envelope)
+
+        if let peripheralID = peerPeripheralMap[peerPublicKey],
+           let peripheral = connectedPeripherals[peripheralID],
+           let bridgeChar = peripheralBridgeControlChars[peripheralID] {
+            sendChunks(chunks, to: peripheral, characteristic: bridgeChar)
+            return
+        }
+
+        if let central = bridgePeerCentrals[peerPublicKey],
+           let bridgeControlCharacteristic {
+            for chunk in chunks {
+                peripheralManager.updateValue(chunk, for: bridgeControlCharacteristic, onSubscribedCentrals: [central])
+            }
+            return
+        }
+
+        throw BridgeSendError.peerUnavailable
     }
 
     func refreshRadioActivity(forceRestart: Bool = false) {
@@ -259,8 +332,15 @@ final class BLEManager: NSObject {
             permissions: [.writeable]
         )
 
+        bridgeControlCharacteristic = CBMutableCharacteristic(
+            type: BLEConstants.bridgeControlCharUUID,
+            properties: [.write, .writeWithoutResponse, .notify],
+            value: nil,
+            permissions: [.writeable]
+        )
+
         let service = CBMutableService(type: BLEConstants.serviceUUID, primary: true)
-        service.characteristics = [identityCharacteristic, messageCharacteristic, ackCharacteristic]
+        service.characteristics = [identityCharacteristic, messageCharacteristic, ackCharacteristic, bridgeControlCharacteristic]
         pigeonService = service
         peripheralManager.add(service)
     }
@@ -298,6 +378,22 @@ final class BLEManager: NSObject {
     private func sendChunks(_ chunks: [Data], to peripheral: CBPeripheral, characteristic: CBCharacteristic) {
         for chunk in chunks {
             peripheral.writeValue(chunk, for: characteristic, type: .withResponse)
+        }
+    }
+
+    private func broadcastBridgeStatusToPeers() {
+        let frame = BridgeProtocol.status(
+            bridgeEnabled: bridgeEnabled,
+            relayReachable: bridgeRelayReachable,
+            capacityRemaining: bridgeCapacityRemaining
+        )
+
+        for peerPublicKey in peerPeripheralMap.keys {
+            try? sendBridgeFrameLocked(frame, to: peerPublicKey)
+        }
+
+        for peerPublicKey in bridgePeerCentrals.keys {
+            try? sendBridgeFrameLocked(frame, to: peerPublicKey)
         }
     }
 
@@ -453,6 +549,65 @@ final class BLEManager: NSObject {
         }
     }
 
+    func processIncomingBridgeChunk(_ data: Data, source: BridgePacketSource) {
+        do {
+            let packet = try MessageProtocol.decodePacket(data)
+            let header = packet.header
+
+            let buffer: ReassemblyBuffer
+            if let existing = bridgeReassemblyBuffers[header.messageID] {
+                buffer = existing
+            } else {
+                buffer = ReassemblyBuffer(messageID: header.messageID, expectedChunkCount: header.totalChunks)
+                bridgeReassemblyBuffers[header.messageID] = buffer
+                bridgePacketSources[header.messageID] = source
+            }
+
+            let complete = buffer.addChunk(index: header.chunkIndex, data: data)
+
+            if complete {
+                bridgeReassemblyBuffers.removeValue(forKey: header.messageID)
+                let source = bridgePacketSources.removeValue(forKey: header.messageID)
+                let packetData = buffer.assembledPacketData()
+
+                do {
+                    let payload = try MessageProtocol.reassemblePayload(from: packetData)
+                    handleReassembledBridgeData(payload, source: source)
+                } catch {
+                    // Drop malformed bridge payloads.
+                }
+            }
+        } catch {
+            // Drop malformed bridge chunks.
+        }
+    }
+
+    private func handleReassembledBridgeData(_ data: Data, source: BridgePacketSource?) {
+        do {
+            let envelope = try MessageProtocol.decodeEnvelope(data)
+            guard envelope.recipientPublicKey == identity.publicKey.rawRepresentation else {
+                return
+            }
+
+            let frame = try BridgeProtocol.decrypt(
+                envelope,
+                using: crypto,
+                recipientPrivateKey: identity.privateKey
+            )
+
+            if case .central(let central) = source {
+                bridgePeerCentrals[envelope.senderPublicKey] = central
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                delegate?.bleManager(self, didReceiveBridgeFrame: frame, from: envelope.senderPublicKey)
+            }
+        } catch {
+            // Drop malformed bridge frames.
+        }
+    }
+
     // MARK: - Internal: Send pending messages to newly connected peer
 
     func sendPendingMessages(toPeerWithPublicKey peerPublicKey: Data, peripheralID: UUID) {
@@ -494,6 +649,7 @@ final class BLEManager: NSObject {
 
     private func purgeExpiredBuffers() {
         reassemblyBuffers = reassemblyBuffers.filter { !$0.value.isExpired }
+        bridgeReassemblyBuffers = bridgeReassemblyBuffers.filter { !$0.value.isExpired }
     }
 
     // MARK: - Internal: State update

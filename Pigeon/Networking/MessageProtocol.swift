@@ -38,6 +38,10 @@ nonisolated struct PeerIdentityPayload: Codable, Hashable, Sendable {
     let publicKey: Data
     let pigeonID: String
     let displayName: String?
+    let bridgeProtocolVersion: Int?
+    let bridgeEnabled: Bool?
+    let relayReachable: Bool?
+    let bridgeCapacityRemaining: Int?
 }
 
 nonisolated struct DeliveryACK: Codable, Hashable, Sendable {

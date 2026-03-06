@@ -44,7 +44,11 @@ final class StoredPeer {
             rssi: rssi,
             firstSeen: firstSeen,
             lastSeen: lastSeen,
-            isSaved: isSaved
+            isSaved: isSaved,
+            bridgeProtocolVersion: nil,
+            bridgeEnabled: false,
+            relayReachable: false,
+            bridgeCapacityRemaining: nil
         )
     }
 }

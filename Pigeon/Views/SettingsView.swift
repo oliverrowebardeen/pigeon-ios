@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppCoordinator.self) private var coordinator
-    @AppStorage("pigeon.settings.meshRelay") private var meshRelayEnabled = true
     @State private var showResetConfirmation = false
     @State private var showClearConfirmation = false
 
@@ -52,7 +51,7 @@ struct SettingsView: View {
             }
             .listRowBackground(PigeonTheme.surface)
 
-            Toggle("Mesh Relay", isOn: $meshRelayEnabled)
+            Toggle("Internet Bridge", isOn: internetBridgeBinding)
                 .tint(PigeonTheme.accent)
                 .listRowBackground(PigeonTheme.surface)
 
@@ -153,7 +152,7 @@ struct SettingsView: View {
 
     private var relayStatusColor: Color {
         switch coordinator.transportState {
-        case .internetConnected: return PigeonTheme.success
+        case .internetDirectConnected, .internetBridgedConnected: return PigeonTheme.success
         case .internetDisconnected: return PigeonTheme.error
         case .bleOnly: return PigeonTheme.textTertiary
         }
@@ -161,10 +160,22 @@ struct SettingsView: View {
 
     private var relayStatusText: String {
         switch coordinator.transportState {
-        case .internetConnected: return "Connected"
+        case .internetDirectConnected: return "Direct"
+        case .internetBridgedConnected:
+            if let bridge = coordinator.activeBridge {
+                return "Via \(bridge.pigeonID)"
+            }
+            return "Via Nearby Bridge"
         case .internetDisconnected: return "Disconnected"
         case .bleOnly: return "Disabled"
         }
+    }
+
+    private var internetBridgeBinding: Binding<Bool> {
+        Binding(
+            get: { coordinator.internetBridgeEnabled },
+            set: { coordinator.setInternetBridgeEnabled($0) }
+        )
     }
 
     private func resetIdentity() {
