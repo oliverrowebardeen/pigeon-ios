@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Network
 import Observation
 import UIKit
 
@@ -72,18 +73,30 @@ final class AppCoordinator {
     var activeBridge: BridgeCandidate?
     var presentedContactProfile: Peer?
     var relayPushTokenRegistered = false
+    var relayPushTokenRegistrationError: String?
     var internetBridgeEnabled: Bool
     private(set) var messageChangeToken = 0
 
     private let deliveryQueueTimeoutNanoseconds: UInt64 = 20_000_000_000
+    private let outboundRetryDebounceNanoseconds: UInt64 = 750_000_000
+    private let bridgeDirectUpgradeDelayNanoseconds: UInt64 = 2_000_000_000
+    private let bridgeDirectUpgradeRetryBackoffSeconds: TimeInterval = 60
     private let maxGroupMembers = 16
+    private let networkPathMonitor = NWPathMonitor()
+    private let networkPathMonitorQueue = DispatchQueue(label: "Pigeon.NetworkPathMonitor")
     private var deliveryTimeoutTasks: [UUID: Task<Void, Never>] = [:]
+    private var outboundRetryTask: Task<Void, Never>?
+    private var bridgeDirectUpgradeTask: Task<Void, Never>?
+    private var bridgeDirectUpgradeNotBefore: Date?
+    private var bridgeBackgroundTaskID: UIBackgroundTaskIdentifier = .invalid
     private var activeConversationID: UUID?
+    private var hasUsableInternetPath = false
 
     private var didStartBLE = false
     private var didStartRelay = false
     private var didRestoreOutboundQueue = false
     private var didRunInitialStartup = false
+    private var isRestoringOutboundMessages = false
 
     private var peerKeyChangeWarnings: [Data: PeerKeyChangeWarning] = [:]
 
@@ -138,6 +151,7 @@ final class AppCoordinator {
         )
 
         try performOneTimeDataResetIfNeeded()
+        startNetworkPathMonitoring()
     }
 
     func bootstrap() {
@@ -147,13 +161,13 @@ final class AppCoordinator {
     }
 
     func start() async {
-        bootstrap()
         guard !didRunInitialStartup else { return }
         didRunInitialStartup = true
-        let notificationGranted = await NotificationManager.shared.requestPermission()
+        let notificationGranted = await NotificationManager.shared.requestPermissionIfNeeded()
         if notificationGranted {
             UIApplication.shared.registerForRemoteNotifications()
         }
+        bootstrap()
         await loadConversations()
     }
 
@@ -428,7 +442,10 @@ final class AppCoordinator {
         guard let conversationID else { return }
 
         try? store.clearUnreadCount(conversationID: conversationID)
-        Task { await loadConversations() }
+        Task {
+            await loadConversations()
+            await sendReadReceiptIfNeeded(for: conversationID)
+        }
     }
 
     func presentContactProfile(_ peer: Peer) {
@@ -441,11 +458,17 @@ final class AppCoordinator {
 
     func didRegisterRemoteDeviceToken(_ token: Data) {
         relayPushTokenRegistered = true
+        relayPushTokenRegistrationError = nil
         guard let relayClient else { return }
 
         Task {
             await relayClient.registerPushToken(token)
         }
+    }
+
+    func didFailRemoteNotificationRegistration(_ error: Error) {
+        relayPushTokenRegistered = false
+        relayPushTokenRegistrationError = error.localizedDescription
     }
 
     func setInternetBridgeEnabled(_ enabled: Bool, userDefaults: UserDefaults = .standard) {
@@ -470,7 +493,55 @@ final class AppCoordinator {
     }
 
     private func canAttemptBLEMeshDelivery(to recipientPublicKey: Data) -> Bool {
-        isPeerNearby(publicKey: recipientPublicKey) || !nearbyPeers.isEmpty
+        return isPeerNearby(publicKey: recipientPublicKey) || !nearbyPeers.isEmpty
+    }
+
+    private func hasAnyRealtimeDeliveryPath(to recipientPublicKey: Data) -> Bool {
+        canAttemptBLEMeshDelivery(to: recipientPublicKey) ||
+            transportState == .internetDirectConnected ||
+            transportState == .internetBridgedConnected
+    }
+
+    private func outboundStatusAfterSend(to recipientPublicKey: Data, usedRelay: Bool) -> MessageStatus {
+        if usedRelay || canAttemptBLEMeshDelivery(to: recipientPublicKey) {
+            return .sent
+        }
+        return .queued
+    }
+
+    private func markOutgoingMessageAsSent(_ messageID: UUID) async {
+        cancelDeliveryTimeout(for: messageID)
+
+        guard let message = try? store.fetchMessage(id: messageID),
+              message.groupID == nil,
+              !message.isIncoming,
+              message.status != .failed,
+              message.status != .delivered
+        else {
+            return
+        }
+
+        try? store.updateMessageStatus(id: messageID, status: .sent)
+        markMessagesChanged()
+        await loadConversations()
+    }
+
+    private func sendReadReceiptIfNeeded(for conversationID: UUID) async {
+        guard let conversation = (try? store.fetchConversation(id: conversationID)) ?? nil,
+              conversation.kind == .direct,
+              let peerPublicKey = conversation.peerPublicKey
+        else {
+            return
+        }
+
+        let messages = (try? store.fetchMessages(forConversation: conversationID)) ?? []
+        guard let latestIncoming = messages.last(where: {
+            $0.isIncoming && $0.senderPublicKey == peerPublicKey
+        }) else {
+            return
+        }
+
+        try? await sendDirectReadReceipt(for: latestIncoming, in: conversation)
     }
 
     func resolvedPeer(for publicKey: Data) -> Peer? {
@@ -641,6 +712,8 @@ final class AppCoordinator {
     }
 
     func applicationDidBecomeActive() {
+        guard didRunInitialStartup else { return }
+        endBridgeBackgroundTaskIfNeeded()
         bootstrap()
         bleManager.refreshRadioActivity(forceRestart: true)
         if let relayClient {
@@ -651,8 +724,10 @@ final class AppCoordinator {
     }
 
     func applicationDidEnterBackground() {
+        guard didRunInitialStartup else { return }
         bootstrap()
         bleManager.refreshRadioActivity()
+        updateBridgeBackgroundExecution()
     }
 
     func candidatePeersForNewGroup() -> [Peer] {
@@ -1029,9 +1104,10 @@ final class AppCoordinator {
                 recipientPublicKey: recipientKey
             )
 
-            let outboundStatus: MessageStatus = usedInternetRelay
-                ? .sent
-                : (isPeerNearby(publicKey: recipientKey) ? .sent : .queued)
+            let outboundStatus = outboundStatusAfterSend(
+                to: recipientKey,
+                usedRelay: usedInternetRelay
+            )
 
             try store.updateMessageStatus(id: message.id, status: outboundStatus)
             try store.updateConversationPreview(id: conversation.id, preview: text, timestamp: message.timestamp)
@@ -1145,6 +1221,22 @@ final class AppCoordinator {
         try await sendWirePayload(payload, to: recipientKey)
     }
 
+    private func sendDirectReadReceipt(for target: Message, in conversation: Conversation) async throws {
+        guard let recipientKey = conversation.peerPublicKey else {
+            throw AppCoordinatorError.invalidDirectConversation
+        }
+
+        let payload = WirePayloadV2(
+            eventType: .directReadReceipt,
+            logicalMessageID: UUID(),
+            conversationID: conversation.id,
+            senderPublicKey: identity.publicKey.rawRepresentation,
+            directReadReceipt: DirectReadReceiptPayload(targetMessageID: target.id)
+        )
+
+        try await sendWirePayload(payload, to: recipientKey)
+    }
+
     private func sendGroupReaction(_ tapback: TapbackType, to target: Message, in conversation: Conversation) async throws {
         guard let groupID = conversation.groupID else {
             throw AppCoordinatorError.invalidConversation
@@ -1245,6 +1337,8 @@ final class AppCoordinator {
         switch payload.eventType {
         case .directText:
             try handleIncomingDirectText(payload, source: source)
+        case .directReadReceipt:
+            try handleIncomingDirectReadReceipt(payload)
         case .directReaction:
             try handleIncomingDirectReaction(payload)
         case .groupKeyShare:
@@ -1309,6 +1403,30 @@ final class AppCoordinator {
                 conversationID: conversation.id
             )
         }
+
+        if isConversationActivelyVisible(conversation.id) {
+            Task {
+                await sendReadReceiptIfNeeded(for: conversation.id)
+            }
+        }
+    }
+
+    private func handleIncomingDirectReadReceipt(_ payload: WirePayloadV2) throws {
+        guard let readReceipt = payload.directReadReceipt else {
+            throw AppCoordinatorError.invalidWirePayload
+        }
+
+        guard let targetMessage = try store.fetchMessage(id: readReceipt.targetMessageID),
+              !targetMessage.isIncoming,
+              targetMessage.recipientPublicKey == payload.senderPublicKey
+        else {
+            return
+        }
+
+        try store.markOutgoingMessagesDelivered(
+            conversationID: targetMessage.conversationID,
+            through: targetMessage.timestamp
+        )
     }
 
     private func handleIncomingDirectReaction(_ payload: WirePayloadV2) throws {
@@ -1499,6 +1617,20 @@ final class AppCoordinator {
         UIApplication.shared.applicationState == .active && activeConversationID == conversationID
     }
 
+    func shouldPresentForegroundNotification(userInfo: [AnyHashable: Any]) -> Bool {
+        guard UIApplication.shared.applicationState == .active else {
+            return true
+        }
+
+        guard let rawConversationID = userInfo["conversationID"] as? String,
+              let conversationID = UUID(uuidString: rawConversationID)
+        else {
+            return true
+        }
+
+        return !isConversationActivelyVisible(conversationID)
+    }
+
     private func shouldIncrementUnread(for conversationID: UUID) -> Bool {
         !isConversationActivelyVisible(conversationID)
     }
@@ -1511,6 +1643,110 @@ final class AppCoordinator {
             return false
         }
         return true
+    }
+
+    private func startNetworkPathMonitoring() {
+        networkPathMonitor.pathUpdateHandler = { [weak self] path in
+            guard let coordinator = self else { return }
+            let isSatisfied = path.status == .satisfied
+            Task { @MainActor [weak coordinator] in
+                coordinator?.handleNetworkPathUpdate(isSatisfied: isSatisfied)
+            }
+        }
+        networkPathMonitor.start(queue: networkPathMonitorQueue)
+    }
+
+    private func handleNetworkPathUpdate(isSatisfied: Bool) {
+        let previous = hasUsableInternetPath
+        hasUsableInternetPath = isSatisfied
+
+        if !isSatisfied {
+            bridgeDirectUpgradeTask?.cancel()
+            bridgeDirectUpgradeTask = nil
+            bridgeDirectUpgradeNotBefore = nil
+            return
+        }
+
+        if !previous, transportState != .internetDirectConnected {
+            bridgeDirectUpgradeNotBefore = nil
+            scheduleDirectUpgradeFromBridge(delayNanoseconds: 0)
+        }
+    }
+
+    private func scheduleDirectUpgradeFromBridge(delayNanoseconds: UInt64) {
+        guard hasUsableInternetPath else { return }
+        guard transportState == .internetBridgedConnected || transportState == .internetDisconnected else {
+            return
+        }
+        guard let relayClient else { return }
+
+        let now = Date()
+        var scheduledDelayNanoseconds = delayNanoseconds
+        if let notBefore = bridgeDirectUpgradeNotBefore,
+           notBefore > now {
+            let backoffNanoseconds = UInt64(
+                (notBefore.timeIntervalSince(now) * 1_000_000_000).rounded(.up)
+            )
+            scheduledDelayNanoseconds = max(scheduledDelayNanoseconds, backoffNanoseconds)
+        }
+
+        bridgeDirectUpgradeTask?.cancel()
+        bridgeDirectUpgradeTask = Task { [weak self] in
+            if scheduledDelayNanoseconds > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: scheduledDelayNanoseconds)
+                } catch {
+                    return
+                }
+            }
+
+            guard let self else { return }
+            guard self.hasUsableInternetPath else { return }
+            guard self.transportState == .internetBridgedConnected || self.transportState == .internetDisconnected else {
+                return
+            }
+
+            self.bridgeDirectUpgradeNotBefore = Date().addingTimeInterval(
+                self.bridgeDirectUpgradeRetryBackoffSeconds
+            )
+            await relayClient.reconnect()
+        }
+    }
+
+    private func updateBridgeBackgroundExecution() {
+        if UIApplication.shared.applicationState != .active,
+           transportState == .internetBridgedConnected {
+            refreshBridgeBackgroundTaskLease()
+        } else {
+            endBridgeBackgroundTaskIfNeeded()
+        }
+    }
+
+    private func refreshBridgeBackgroundTaskLease() {
+        guard UIApplication.shared.applicationState != .active else {
+            endBridgeBackgroundTaskIfNeeded()
+            return
+        }
+
+        guard transportState == .internetBridgedConnected else {
+            endBridgeBackgroundTaskIfNeeded()
+            return
+        }
+
+        endBridgeBackgroundTaskIfNeeded()
+        bridgeBackgroundTaskID = UIApplication.shared.beginBackgroundTask(
+            withName: "PigeonBridgeRelay"
+        ) { [weak self] in
+            Task { @MainActor in
+                self?.endBridgeBackgroundTaskIfNeeded()
+            }
+        }
+    }
+
+    private func endBridgeBackgroundTaskIfNeeded() {
+        guard bridgeBackgroundTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(bridgeBackgroundTaskID)
+        bridgeBackgroundTaskID = .invalid
     }
 
     private func handleIncomingGroupReaction(_ payload: WirePayloadV2) throws {
@@ -1617,22 +1853,34 @@ final class AppCoordinator {
         }
 
         let canUseBLEMesh = canAttemptBLEMeshDelivery(to: recipientPublicKey)
-        var usedRelay = false
+        let relayPathActive = transportState == .internetDirectConnected ||
+            transportState == .internetBridgedConnected
 
-        if let relayClient {
-            do {
-                try await relayClient.sendEnvelope(envelope)
-                usedRelay = true
-            } catch {
-                // Keep the BLE mesh path active even when relay delivery is unavailable.
-            }
-        }
-
-        if canUseBLEMesh || !usedRelay {
+        if canUseBLEMesh {
             bleManager.sendMessage(envelope, to: recipientPublicKey)
         }
 
-        return usedRelay
+        guard let relayClient else {
+            if !canUseBLEMesh {
+                bleManager.sendMessage(envelope, to: recipientPublicKey)
+            }
+            return false
+        }
+
+        if canUseBLEMesh {
+            Task {
+                try? await relayClient.sendEnvelope(envelope)
+            }
+            return relayPathActive
+        }
+
+        do {
+            try await relayClient.sendEnvelope(envelope)
+            return true
+        } catch {
+            bleManager.sendMessage(envelope, to: recipientPublicKey)
+            return false
+        }
     }
 
     private func acknowledgeRelayMessage(_ messageID: UUID) async {
@@ -1671,6 +1919,11 @@ final class AppCoordinator {
         }
 
         guard message.status == .sending || message.status == .sent else {
+            return
+        }
+
+        if let recipientKey = message.recipientPublicKey,
+           hasAnyRealtimeDeliveryPath(to: recipientKey) {
             return
         }
 
@@ -1841,58 +2094,125 @@ final class AppCoordinator {
         didRestoreOutboundQueue = true
 
         Task {
-            await restorePendingOutboundMessages()
+            await restorePendingOutboundMessages(retryQueuedOnly: false)
         }
     }
 
-    private func restorePendingOutboundMessages() async {
-        let pendingMessages = (try? store.fetchPendingOutgoingMessages()) ?? []
+    private func scheduleQueuedOutboundRetry() {
+        guard didRunInitialStartup else { return }
+
+        outboundRetryTask?.cancel()
+        outboundRetryTask = Task { [weak self] in
+            do {
+                try await Task.sleep(
+                    nanoseconds: self?.outboundRetryDebounceNanoseconds ?? 750_000_000
+                )
+            } catch {
+                return
+            }
+
+            guard let self else { return }
+            await self.restorePendingOutboundMessages(retryQueuedOnly: true)
+        }
+    }
+
+    private func restorePendingOutboundMessages(retryQueuedOnly: Bool) async {
+        guard !isRestoringOutboundMessages else { return }
+        isRestoringOutboundMessages = true
+        defer { isRestoringOutboundMessages = false }
+
+        let pendingMessages = retryQueuedOnly
+            ? ((try? store.fetchQueuedOutgoingMessages()) ?? [])
+            : ((try? store.fetchPendingOutgoingMessages()) ?? [])
         guard !pendingMessages.isEmpty else { return }
 
-        for message in pendingMessages where message.groupID == nil {
-            guard let recipientKey = message.recipientPublicKey else {
-                continue
-            }
-
-            if peerKeyChangeWarnings[recipientKey] != nil {
-                continue
-            }
-
-            do {
-                let payload = WirePayloadV2(
-                    eventType: .directText,
-                    logicalMessageID: message.id,
-                    conversationID: message.conversationID,
-                    senderPublicKey: identity.publicKey.rawRepresentation,
-                    timestamp: message.timestamp,
-                    directText: DirectTextPayload(text: message.plaintext, reply: message.replyMetadata)
-                )
-                let payloadData = try Self.wireEncoder.encode(payload)
-
-                let envelope = try crypto.encrypt(
-                    plaintext: payloadData,
-                    senderPrivateKey: identity.privateKey,
-                    recipientPublicKeyData: recipientKey,
-                    messageID: message.id,
-                    timestamp: message.timestamp
-                )
-
-                let usedRelay = await sendViaAvailableTransports(envelope, recipientPublicKey: recipientKey)
-                let updatedStatus: MessageStatus = usedRelay
-                    ? .sent
-                    : (isPeerNearby(publicKey: recipientKey) ? .sent : .queued)
-                try store.updateMessageStatus(id: message.id, status: updatedStatus)
-
-                if updatedStatus == .sent {
-                    scheduleDeliveryTimeout(for: message.id)
-                }
-            } catch {
-                try? store.updateMessageStatus(id: message.id, status: .failed)
+        for message in pendingMessages {
+            if let groupID = message.groupID {
+                await retryPendingGroupMessage(message, groupID: groupID)
+            } else {
+                await retryPendingDirectMessage(message)
             }
         }
 
         markMessagesChanged()
         await loadConversations()
+    }
+
+    private func retryPendingDirectMessage(_ message: Message) async {
+        guard let recipientKey = message.recipientPublicKey else { return }
+        guard peerKeyChangeWarnings[recipientKey] == nil else { return }
+
+        do {
+            let payload = WirePayloadV2(
+                eventType: .directText,
+                logicalMessageID: message.id,
+                conversationID: message.conversationID,
+                senderPublicKey: identity.publicKey.rawRepresentation,
+                timestamp: message.timestamp,
+                directText: DirectTextPayload(text: message.plaintext, reply: message.replyMetadata)
+            )
+            let payloadData = try Self.wireEncoder.encode(payload)
+
+            let envelope = try crypto.encrypt(
+                plaintext: payloadData,
+                senderPrivateKey: identity.privateKey,
+                recipientPublicKeyData: recipientKey,
+                messageID: message.id,
+                timestamp: message.timestamp
+            )
+
+            let usedRelay = await sendViaAvailableTransports(envelope, recipientPublicKey: recipientKey)
+            let updatedStatus = outboundStatusAfterSend(
+                to: recipientKey,
+                usedRelay: usedRelay
+            )
+            try store.updateMessageStatus(id: message.id, status: updatedStatus)
+
+            if updatedStatus == .sent {
+                scheduleDeliveryTimeout(for: message.id)
+            }
+        } catch {
+            try? store.updateMessageStatus(id: message.id, status: .failed)
+        }
+    }
+
+    private func retryPendingGroupMessage(_ message: Message, groupID: UUID) async {
+        do {
+            guard let group = try store.fetchGroup(id: groupID) else {
+                throw AppCoordinatorError.groupNotFound
+            }
+
+            guard let groupKey = try keyStore.loadGroupSymmetricKey(groupID: groupID, epoch: group.activeEpoch) else {
+                throw AppCoordinatorError.missingGroupKey
+            }
+
+            let innerPayload = GroupInnerPayload(
+                text: GroupTextPayload(text: message.plaintext, reply: message.replyMetadata)
+            )
+            let innerData = try Self.wireEncoder.encode(innerPayload)
+            let encrypted = try GroupEncryptedPayload.encrypting(
+                innerData,
+                groupID: groupID,
+                epoch: group.activeEpoch,
+                using: groupCrypto,
+                keyData: groupKey
+            )
+
+            let payload = WirePayloadV2(
+                eventType: .groupMessage,
+                logicalMessageID: message.id,
+                conversationID: message.conversationID,
+                groupID: groupID,
+                senderPublicKey: identity.publicKey.rawRepresentation,
+                timestamp: message.timestamp,
+                groupEncrypted: encrypted
+            )
+
+            let didSend = try await sendGroupPayload(payload, groupID: groupID)
+            try store.updateMessageStatus(id: message.id, status: didSend ? .sent : .queued)
+        } catch {
+            try? store.updateMessageStatus(id: message.id, status: .failed)
+        }
     }
 
     private static func relayWebSocketURL(bundle: Bundle = .main) -> URL? {
@@ -1929,6 +2249,7 @@ extension AppCoordinator: BLEManagerDelegate {
 
     nonisolated func bleManager(_ manager: BLEManager, didReceiveBridgeFrame frame: BridgeControlFrame, from peerPublicKey: Data) {
         Task { @MainActor in
+            refreshBridgeBackgroundTaskLease()
             await relayClient?.handleBridgeControlFrame(frame, from: peerPublicKey)
             let didChangeBridgeAvailability = await bridgeTunnelBroker?.handle(frame, from: peerPublicKey) ?? false
 
@@ -1949,6 +2270,7 @@ extension AppCoordinator: BLEManagerDelegate {
                 nearbyPeers.append(peer)
             }
             refreshBridgeCandidates()
+            scheduleQueuedOutboundRetry()
         }
     }
 
@@ -1961,6 +2283,7 @@ extension AppCoordinator: BLEManagerDelegate {
                 nearbyPeers.append(peer)
             }
             refreshBridgeCandidates()
+            scheduleQueuedOutboundRetry()
         }
     }
 
@@ -1976,12 +2299,7 @@ extension AppCoordinator: BLEManagerDelegate {
 
     nonisolated func bleManager(_ manager: BLEManager, didDeliverMessage messageID: UUID) {
         Task { @MainActor in
-            cancelDeliveryTimeout(for: messageID)
-
-            if let message = try? store.fetchMessage(id: messageID), message.groupID == nil {
-                try? store.updateMessageStatus(id: messageID, status: .delivered)
-                markMessagesChanged()
-            }
+            await markOutgoingMessageAsSent(messageID)
         }
     }
 
@@ -2007,27 +2325,53 @@ extension AppCoordinator: BLEManagerDelegate {
 extension AppCoordinator: InternetRelayClientDelegate {
     nonisolated func relayClientDidUpdateState(_ state: TransportState, activeBridge: BridgeCandidate?) {
         Task { @MainActor in
+            let previousState = transportState
             transportState = state
             self.activeBridge = activeBridge
             await refreshBridgeHostAvailability()
+            updateBridgeBackgroundExecution()
+
+            switch state {
+            case .internetDirectConnected:
+                bridgeDirectUpgradeTask?.cancel()
+                bridgeDirectUpgradeTask = nil
+                bridgeDirectUpgradeNotBefore = nil
+            case .internetBridgedConnected:
+                if hasUsableInternetPath {
+                    scheduleDirectUpgradeFromBridge(
+                        delayNanoseconds: bridgeDirectUpgradeDelayNanoseconds
+                    )
+                }
+            case .internetDisconnected:
+                if hasUsableInternetPath {
+                    scheduleDirectUpgradeFromBridge(delayNanoseconds: 0)
+                }
+            case .bleOnly:
+                bridgeDirectUpgradeTask?.cancel()
+                bridgeDirectUpgradeTask = nil
+                bridgeDirectUpgradeNotBefore = nil
+            }
+
+            let routeRecovered =
+                (state == .internetDirectConnected || state == .internetBridgedConnected) &&
+                state != previousState
+            if routeRecovered {
+                scheduleQueuedOutboundRetry()
+            }
         }
     }
 
     nonisolated func relayClient(didReceiveEnvelope envelope: MessageEnvelope) {
         Task { @MainActor in
+            refreshBridgeBackgroundTaskLease()
             await processIncomingEnvelope(envelope, source: .relay)
         }
     }
 
     nonisolated func relayClient(didReceiveDeliveryAck messageID: UUID) {
         Task { @MainActor in
-            cancelDeliveryTimeout(for: messageID)
             await router.acknowledgeDelivery(messageID)
-            if let message = try? store.fetchMessage(id: messageID), message.groupID == nil {
-                try? store.updateMessageStatus(id: messageID, status: .delivered)
-                markMessagesChanged()
-                await loadConversations()
-            }
+            await markOutgoingMessageAsSent(messageID)
         }
     }
 }

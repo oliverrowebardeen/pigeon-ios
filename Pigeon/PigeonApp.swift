@@ -11,7 +11,6 @@ struct PigeonApp: App {
         do {
             let store = try PigeonStore()
             let coord = try AppCoordinator(store: store)
-            coord.bootstrap()
             _coordinator = State(initialValue: coord)
         } catch {
             fatalError("Failed to initialize Pigeon: \(error)")

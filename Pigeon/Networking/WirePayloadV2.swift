@@ -2,6 +2,7 @@ import Foundation
 
 nonisolated enum WireEventType: String, Codable, Hashable, Sendable {
     case directText = "direct_text"
+    case directReadReceipt = "direct_read_receipt"
     case directReaction = "direct_reaction"
     case groupKeyShare = "group_key_share"
     case groupControl = "group_control"
@@ -29,6 +30,10 @@ nonisolated struct DirectReactionPayload: Codable, Hashable, Sendable {
     let targetMessageID: UUID
     let tapback: TapbackType
     let isRemoval: Bool
+}
+
+nonisolated struct DirectReadReceiptPayload: Codable, Hashable, Sendable {
+    let targetMessageID: UUID
 }
 
 nonisolated struct GroupKeySharePayload: Codable, Hashable, Sendable {
@@ -97,6 +102,7 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
     let timestamp: Date
 
     let directText: DirectTextPayload?
+    let directReadReceipt: DirectReadReceiptPayload?
     let directReaction: DirectReactionPayload?
     let groupKeyShare: GroupKeySharePayload?
     let groupControl: GroupControlPayload?
@@ -110,6 +116,7 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
         senderPublicKey: Data,
         timestamp: Date = Date(),
         directText: DirectTextPayload? = nil,
+        directReadReceipt: DirectReadReceiptPayload? = nil,
         directReaction: DirectReactionPayload? = nil,
         groupKeyShare: GroupKeySharePayload? = nil,
         groupControl: GroupControlPayload? = nil,
@@ -123,6 +130,7 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
         self.senderPublicKey = senderPublicKey
         self.timestamp = timestamp
         self.directText = directText
+        self.directReadReceipt = directReadReceipt
         self.directReaction = directReaction
         self.groupKeyShare = groupKeyShare
         self.groupControl = groupControl

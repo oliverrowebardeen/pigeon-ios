@@ -6,6 +6,21 @@ final class NotificationManager {
 
     private init() {}
 
+    func requestPermissionIfNeeded() async -> Bool {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return true
+        case .notDetermined:
+            return await requestPermission()
+        case .denied:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
     func requestPermission() async -> Bool {
         do {
             return try await UNUserNotificationCenter.current()

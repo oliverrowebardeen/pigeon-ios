@@ -58,7 +58,7 @@ struct SettingsView: View {
             HStack {
                 Text("APNS Token")
                 Spacer()
-                Text(coordinator.relayPushTokenRegistered ? "Registered" : "Waiting")
+                Text(apnsTokenStatusText)
                     .foregroundColor(PigeonTheme.textSecondary)
             }
             .listRowBackground(PigeonTheme.surface)
@@ -129,6 +129,16 @@ struct SettingsView: View {
             }
             .listRowBackground(PigeonTheme.surface)
         }
+    }
+
+    private var apnsTokenStatusText: String {
+        if coordinator.relayPushTokenRegistered {
+            return "Registered"
+        }
+        if coordinator.relayPushTokenRegistrationError != nil {
+            return "Failed"
+        }
+        return "Waiting"
     }
 
     private var bleStatusColor: Color {

@@ -8,6 +8,10 @@ nonisolated enum TapbackType: String, Codable, CaseIterable, Sendable {
     case question
     case exclaim
 
+    static var pickerCases: [TapbackType] {
+        [.like, .dislike, .laugh, .emphasize, .question]
+    }
+
     var symbolName: String {
         switch self {
         case .like: return "hand.thumbsup.fill"

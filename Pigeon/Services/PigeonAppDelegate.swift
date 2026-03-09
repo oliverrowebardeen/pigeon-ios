@@ -24,9 +24,11 @@ final class PigeonAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificati
 
     func application(
         _: UIApplication,
-        didFailToRegisterForRemoteNotificationsWithError _: Error
+        didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
-        // Non-fatal: app continues with local notifications and BLE.
+        Task { @MainActor in
+            coordinator?.didFailRemoteNotificationRegistration(error)
+        }
     }
 
     func application(
@@ -56,6 +58,11 @@ final class PigeonAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificati
         await MainActor.run {
             coordinator?.handleRemoteNotification(notification.request.content.userInfo)
         }
-        return []
+        let shouldPresent = await MainActor.run {
+            coordinator?.shouldPresentForegroundNotification(
+                userInfo: notification.request.content.userInfo
+            ) ?? false
+        }
+        return shouldPresent ? [.banner, .sound, .badge] : []
     }
 }

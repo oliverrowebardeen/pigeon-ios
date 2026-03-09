@@ -378,7 +378,7 @@ struct ChatView: View {
             }
 
             HStack(spacing: 10) {
-                ForEach(TapbackType.allCases, id: \.self) { tapback in
+                ForEach(TapbackType.pickerCases, id: \.self) { tapback in
                     Button {
                         react(with: tapback, to: message)
                     } label: {

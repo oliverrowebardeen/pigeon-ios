@@ -96,6 +96,40 @@ final class PigeonStore {
         return try modelContext.fetch(descriptor).map { $0.toDTO() }
     }
 
+    func fetchQueuedOutgoingMessages() throws -> [Message] {
+        let queued = MessageStatus.queued.rawValue
+        let predicate = #Predicate<StoredMessage> {
+            $0.isIncoming == false && $0.statusRaw == queued
+        }
+        let sort = SortDescriptor(\StoredMessage.timestamp, order: .forward)
+        let descriptor = FetchDescriptor<StoredMessage>(predicate: predicate, sortBy: [sort])
+        return try modelContext.fetch(descriptor).map { $0.toDTO() }
+    }
+
+    func markOutgoingMessagesDelivered(
+        conversationID: UUID,
+        through timestamp: Date
+    ) throws {
+        let sending = MessageStatus.sending.rawValue
+        let sent = MessageStatus.sent.rawValue
+        let delivered = MessageStatus.delivered.rawValue
+        let predicate = #Predicate<StoredMessage> {
+            $0.conversationID == conversationID &&
+            $0.isIncoming == false &&
+            ($0.statusRaw == sending || $0.statusRaw == sent || $0.statusRaw == delivered) &&
+            $0.timestamp <= timestamp
+        }
+        let descriptor = FetchDescriptor<StoredMessage>(predicate: predicate)
+        let messages = try modelContext.fetch(descriptor)
+        guard !messages.isEmpty else { return }
+
+        for message in messages where message.status != .failed {
+            message.status = .delivered
+        }
+
+        try modelContext.save()
+    }
+
     // MARK: - Reactions
 
     func saveOrReplaceReaction(_ reaction: MessageReaction) throws {
@@ -173,6 +207,10 @@ final class PigeonStore {
         let predicate = #Predicate<StoredConversation> { $0.peerPublicKey == peerPublicKey }
         let descriptor = FetchDescriptor<StoredConversation>(predicate: predicate)
         return try modelContext.fetch(descriptor).first?.toDTO()
+    }
+
+    func fetchConversation(id: UUID) throws -> Conversation? {
+        try fetchStoredConversation(id: id)?.toDTO()
     }
 
     func findConversation(byGroupID groupID: UUID) throws -> Conversation? {

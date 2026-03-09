@@ -44,6 +44,7 @@ actor InternetRelayClient {
     private var currentState: TransportState = .internetDisconnected
     private var activeBridge: BridgeCandidate?
     private var isRunning = false
+    private var isConnecting = false
 
     init(
         identity: PigeonIdentity,
@@ -126,7 +127,10 @@ actor InternetRelayClient {
             return
         }
 
-        if currentState == .internetDisconnected {
+        if currentState == .internetDisconnected,
+           !isConnecting,
+           pendingBridgeTransport == nil,
+           activeBridgeTransport == nil {
             await connectPreferredPath(forceDirectRetry: false)
         }
     }
@@ -173,6 +177,9 @@ actor InternetRelayClient {
 
     private func connectPreferredPath(forceDirectRetry: Bool) async {
         guard isRunning else { return }
+        guard !isConnecting else { return }
+        isConnecting = true
+        defer { isConnecting = false }
 
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -191,6 +198,18 @@ actor InternetRelayClient {
         await session.disconnect(notify: false)
         await updateState(.internetDisconnected, activeBridge: nil)
 
+        let shouldPreferBridge = bridgeFallbackEnabled &&
+            !forceDirectRetry &&
+            hasEligibleBridgeCandidate()
+
+        if shouldPreferBridge {
+            do {
+                try await connectBridge(forceSwitch: false)
+                return
+            } catch {
+            }
+        }
+
         do {
             try await connectDirect()
             return
@@ -202,10 +221,12 @@ actor InternetRelayClient {
             return
         }
 
-        do {
-            try await connectBridge(forceSwitch: forceDirectRetry)
-            return
-        } catch {
+        if !shouldPreferBridge {
+            do {
+                try await connectBridge(forceSwitch: forceDirectRetry)
+                return
+            } catch {
+            }
         }
 
         scheduleReconnectIfNeeded()
@@ -260,12 +281,7 @@ actor InternetRelayClient {
     }
 
     private func selectBridgeCandidate(forceSwitch: Bool) throws -> BridgeCandidate {
-        let eligible = bridgeCandidates
-            .filter { candidate in
-                candidate.bridgeEnabled &&
-                    candidate.relayReachable &&
-                    (candidate.capacityRemaining ?? 1) > 0
-            }
+        let eligible = eligibleBridgeCandidates()
             .sorted { lhs, rhs in
                 let lhsRSSI = lhs.rssi ?? Int.min
                 let rhsRSSI = rhs.rssi ?? Int.min
@@ -288,6 +304,18 @@ actor InternetRelayClient {
         }
 
         return best
+    }
+
+    private func hasEligibleBridgeCandidate() -> Bool {
+        !eligibleBridgeCandidates().isEmpty
+    }
+
+    private func eligibleBridgeCandidates() -> [BridgeCandidate] {
+        bridgeCandidates.filter { candidate in
+            candidate.bridgeEnabled &&
+                candidate.relayReachable &&
+                (candidate.capacityRemaining ?? 1) > 0
+        }
     }
 
     private func scheduleReconnectIfNeeded() {

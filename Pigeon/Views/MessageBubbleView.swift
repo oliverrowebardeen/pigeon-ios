@@ -243,7 +243,7 @@ struct MessageBubbleView: View {
         case .sending:
             return "Sending..."
         case .queued:
-            return "Queued (not sent yet)"
+            return "Waiting for route"
         case .failed:
             return "Failed to send"
         case .sent, .delivered:
