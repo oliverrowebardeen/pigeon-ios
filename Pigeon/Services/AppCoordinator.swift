@@ -42,6 +42,7 @@ final class AppCoordinator {
     private static let currentDataModelVersion = 2
     private static let internetBridgeEnabledDefaultsKey = "pigeon.settings.internetBridgeEnabled"
     private static let legacyMeshRelayDefaultsKey = "pigeon.settings.meshRelay"
+    private static let relayPushNotificationsEnabled = false
 
     private static let wireEncoder: JSONEncoder = {
         let encoder = JSONEncoder()
@@ -163,9 +164,13 @@ final class AppCoordinator {
     func start() async {
         guard !didRunInitialStartup else { return }
         didRunInitialStartup = true
-        let notificationGranted = await NotificationManager.shared.requestPermissionIfNeeded()
-        if notificationGranted {
+        _ = await NotificationManager.shared.requestPermissionIfNeeded()
+        if Self.relayPushNotificationsEnabled {
             UIApplication.shared.registerForRemoteNotifications()
+        } else {
+            UIApplication.shared.unregisterForRemoteNotifications()
+            relayPushTokenRegistered = false
+            relayPushTokenRegistrationError = nil
         }
         bootstrap()
         await loadConversations()
@@ -457,6 +462,7 @@ final class AppCoordinator {
     }
 
     func didRegisterRemoteDeviceToken(_ token: Data) {
+        guard Self.relayPushNotificationsEnabled else { return }
         relayPushTokenRegistered = true
         relayPushTokenRegistrationError = nil
         guard let relayClient else { return }
@@ -467,8 +473,13 @@ final class AppCoordinator {
     }
 
     func didFailRemoteNotificationRegistration(_ error: Error) {
+        guard Self.relayPushNotificationsEnabled else { return }
         relayPushTokenRegistered = false
         relayPushTokenRegistrationError = error.localizedDescription
+    }
+
+    var relayPushNotificationsEnabled: Bool {
+        Self.relayPushNotificationsEnabled
     }
 
     func setInternetBridgeEnabled(_ enabled: Bool, userDefaults: UserDefaults = .standard) {
@@ -1625,7 +1636,7 @@ final class AppCoordinator {
         guard let rawConversationID = userInfo["conversationID"] as? String,
               let conversationID = UUID(uuidString: rawConversationID)
         else {
-            return true
+            return false
         }
 
         return !isConversationActivelyVisible(conversationID)

@@ -132,6 +132,9 @@ struct SettingsView: View {
     }
 
     private var apnsTokenStatusText: String {
+        if !coordinator.relayPushNotificationsEnabled {
+            return "Disabled"
+        }
         if coordinator.relayPushTokenRegistered {
             return "Registered"
         }
