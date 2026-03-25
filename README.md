@@ -87,7 +87,7 @@ This project prioritizes correctness and security:
 ### Clone and Build
 
 ```bash
-git clone https://github.com/oliverrowebardeen/pigeon-ios.git
+git clone https://github.com/oliverrowebardeen/Pigeon.git
 cd pigeon-ios
 xcodebuild -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
