@@ -70,16 +70,6 @@ Every message is end-to-end encrypted before it leaves the sending device:
 - **Zero-knowledge relay** — The relay server only sees opaque ciphertext, sender/recipient public keys, and timestamps. It cannot decrypt content. Bridge phones similarly forward encrypted frames they cannot read.
 - **Group encryption** — Groups use symmetric key encryption with epoch-based rotation. When members are added or removed, the group key rotates and is redistributed to active members.
 
-## Code Quality
-
-This project prioritizes correctness and security:
-
-- **Zero force-unwraps** — No `!` or `try!` anywhere in the codebase
-- **Strict Swift concurrency** — `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` with explicit `nonisolated` and `Sendable` annotations for cross-isolation types
-- **Zero external dependencies** — Only Apple frameworks (CoreBluetooth, CryptoKit, SwiftData, SwiftUI, Observation)
-- **Clean architecture** — MVVM with `@Observable`, two-layer model (DTOs for networking, `@Model` for persistence), environment-injected coordinator
-- **3,400 lines of Swift** across 57 files — focused and lean
-
 ## Building
 
 ### Prerequisites
