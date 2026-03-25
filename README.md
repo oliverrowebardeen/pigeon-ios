@@ -2,6 +2,10 @@
 
 Pigeon is an encrypted mesh messenger for iOS. It sends text messages between iPhones over Bluetooth Low Energy — no internet, no server, no accounts. Each device acts as both a client and a relay node, forwarding messages across nearby phones until they reach their destination. When internet is available, Pigeon can also route through an encrypted relay server, or use a nearby internet-connected phone as a bridge. The relay server never sees plaintext — it forwards opaque encrypted blobs.
 
+## Try It
+
+**[Download on TestFlight](https://testflight.apple.com)** — first 100 testers.
+
 ## Features
 
 - **BLE mesh networking** — Messages hop across nearby iPhones using Bluetooth Low Energy. Multi-hop relay with TTL-based forwarding and deduplication.
