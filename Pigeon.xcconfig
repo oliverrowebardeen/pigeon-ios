@@ -1,0 +1,13 @@
+// Pigeon.xcconfig
+// Shared build configuration for the Pigeon project.
+//
+// To set your Apple Developer Team ID for code signing on physical devices:
+// 1. Create a file called Pigeon.local.xcconfig in this same directory
+// 2. Add one line: DEVELOPMENT_TEAM = YOUR_TEAM_ID
+//
+// Pigeon.local.xcconfig is gitignored and will not be committed.
+// Simulator builds work without a team ID.
+
+#include? "Pigeon.local.xcconfig"
+
+DEVELOPMENT_TEAM =

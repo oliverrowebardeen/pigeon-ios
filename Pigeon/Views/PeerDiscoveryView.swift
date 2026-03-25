@@ -96,7 +96,7 @@ struct PeerDiscoveryView: View {
             let conversation = try coordinator.startConversation(with: peer)
             navigationPath.append(conversation)
         } catch {
-            // Handle error
+            print("[Pigeon] Peer discovery error: \(error)")
         }
     }
 

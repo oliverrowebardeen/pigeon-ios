@@ -3,7 +3,29 @@
 # Xcode user-specific files
 xcuserdata/
 *.xcuserstate
+*.pbxuser
+!default.pbxuser
+*.perspectivev3
+!default.perspectivev3
 
 # Xcode build outputs
 DerivedData/
 build/
+
+# Build artifacts
+*.ipa
+*.dSYM/
+*.dSYM.zip
+
+# Swift Package Manager
+.swiftpm/
+
+# Environment files
+.env*
+
+# Xcode migration
+*.moved-aside
+
+# Local build config (contributors set their own team ID here)
+Pigeon.local.xcconfig
+
