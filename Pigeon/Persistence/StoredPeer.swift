@@ -47,6 +47,7 @@ final class StoredPeer {
             isSaved: isSaved,
             bridgeProtocolVersion: nil,
             bridgeEnabled: false,
+            isMeshNode: false,
             relayReachable: false,
             bridgeCapacityRemaining: nil
         )

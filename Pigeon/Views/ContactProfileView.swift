@@ -157,6 +157,8 @@ struct ContactProfileView: View {
         switch reachability {
         case .inRange:
             return "In Range"
+        case .meshReachable:
+            return "Mesh Reachable"
         case .connectedToInternet:
             return coordinator.transportState == .internetBridgedConnected
                 ? "Connected to Internet via Nearby Bridge"
@@ -170,6 +172,8 @@ struct ContactProfileView: View {
         switch reachability {
         case .inRange:
             return PigeonTheme.success
+        case .meshReachable:
+            return PigeonTheme.accent
         case .connectedToInternet:
             return PigeonTheme.internet
         case .outOfRange:
@@ -181,6 +185,8 @@ struct ContactProfileView: View {
         switch reachability {
         case .inRange:
             return "antenna.radiowaves.left.and.right"
+        case .meshReachable:
+            return "point.3.connected.trianglepath.dotted"
         case .connectedToInternet:
             return coordinator.transportState == .internetBridgedConnected
                 ? "point.3.connected.trianglepath.dotted"

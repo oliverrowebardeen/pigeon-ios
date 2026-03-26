@@ -19,6 +19,7 @@ extension BLEManager: CBCentralManagerDelegate {
             peripheralMessageChars.removeAll()
             peripheralACKChars.removeAll()
             peripheralBridgeControlChars.removeAll()
+            peripheralReachabilityChars.removeAll()
             lastConnectAttemptAt.removeAll()
             nearbyPeers.removeAll()
         default:
@@ -108,6 +109,7 @@ extension BLEManager: CBCentralManagerDelegate {
         peripheralMessageChars.removeValue(forKey: peripheralID)
         peripheralACKChars.removeValue(forKey: peripheralID)
         peripheralBridgeControlChars.removeValue(forKey: peripheralID)
+        peripheralReachabilityChars.removeValue(forKey: peripheralID)
 
         // Attempt reconnection immediately so iOS can wake us on reconnection events while locked.
         if central.state == .poweredOn {
@@ -153,6 +155,7 @@ extension BLEManager: CBPeripheralDelegate {
                     BLEConstants.messageCharUUID,
                     BLEConstants.ackCharUUID,
                     BLEConstants.bridgeControlCharUUID,
+                    BLEConstants.reachabilityCharUUID,
                 ],
                 for: service
             )
@@ -186,6 +189,11 @@ extension BLEManager: CBPeripheralDelegate {
                 peripheralBridgeControlChars[peripheralID] = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
 
+            case BLEConstants.reachabilityCharUUID:
+                peripheralReachabilityChars[peripheralID] = characteristic
+                peripheral.readValue(for: characteristic)
+                peripheral.setNotifyValue(true, for: characteristic)
+
             default:
                 break
             }
@@ -211,6 +219,9 @@ extension BLEManager: CBPeripheralDelegate {
 
         case BLEConstants.bridgeControlCharUUID:
             processIncomingBridgeChunk(data, source: .peripheral(peripheral.identifier))
+
+        case BLEConstants.reachabilityCharUUID:
+            handleReceivedReachability(data, fromPeerID: peripheral.identifier)
 
         default:
             break
@@ -256,6 +267,7 @@ extension BLEManager: CBPeripheralDelegate {
                 isSaved: nearbyPeers[payload.publicKey]?.isSaved ?? false,
                 bridgeProtocolVersion: payload.bridgeProtocolVersion,
                 bridgeEnabled: payload.bridgeEnabled ?? false,
+                isMeshNode: payload.isMeshNode ?? false,
                 relayReachable: payload.relayReachable ?? false,
                 bridgeCapacityRemaining: payload.bridgeCapacityRemaining
             )
@@ -274,6 +286,9 @@ extension BLEManager: CBPeripheralDelegate {
 
             // Send any pending messages for this peer
             sendPendingMessages(toPeerWithPublicKey: payload.publicKey, peripheralID: peripheralID)
+
+            // Broadcast updated reachability (our peer list changed)
+            broadcastOwnReachability()
         } catch {
             // Malformed identity payload
         }

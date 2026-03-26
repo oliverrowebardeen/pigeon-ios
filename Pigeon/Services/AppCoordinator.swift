@@ -31,6 +31,7 @@ nonisolated enum InboundSource: Sendable {
 
 nonisolated enum DirectConversationReachability: Sendable {
     case inRange
+    case meshReachable
     case connectedToInternet
     case outOfRange
 }
@@ -65,9 +66,12 @@ final class AppCoordinator {
     let relayClient: InternetRelayClient?
     let bridgeTunnelBroker: BridgeTunnelBroker?
     let relayURL: URL?
+    let meshTopology = MeshTopology()
 
     var conversations: [Conversation] = []
     var nearbyPeers: [Peer] = []
+    var nearbyContacts: [Peer] { nearbyPeers.filter { !$0.isMeshNode } }
+    var connectedMeshNodeCount: Int { nearbyPeers.filter(\.isMeshNode).count }
     var bleState: BLEManager.State = .idle
     var transportState: TransportState = .bleOnly
     var activeBridge: BridgeCandidate?
@@ -99,6 +103,7 @@ final class AppCoordinator {
     private var isRestoringOutboundMessages = false
 
     private var peerKeyChangeWarnings: [Data: PeerKeyChangeWarning] = [:]
+    private var meshReachabilityCache: [Data: Bool] = [:]
 
     init(store: PigeonStore) throws {
         let identity = try PigeonIdentity.loadOrCreate()
@@ -599,6 +604,7 @@ final class AppCoordinator {
             isSaved: true,
             bridgeProtocolVersion: existingPeer.bridgeProtocolVersion,
             bridgeEnabled: existingPeer.bridgeEnabled,
+            isMeshNode: existingPeer.isMeshNode,
             relayReachable: existingPeer.relayReachable,
             bridgeCapacityRemaining: existingPeer.bridgeCapacityRemaining
         )
@@ -667,6 +673,7 @@ final class AppCoordinator {
         merged.isSaved = existingPeer.isSaved || nearbyPeer.isSaved
         merged.bridgeProtocolVersion = nearbyPeer.bridgeProtocolVersion ?? existingPeer.bridgeProtocolVersion
         merged.bridgeEnabled = nearbyPeer.bridgeEnabled
+        merged.isMeshNode = nearbyPeer.isMeshNode
         merged.relayReachable = nearbyPeer.relayReachable
         merged.bridgeCapacityRemaining = nearbyPeer.bridgeCapacityRemaining ?? existingPeer.bridgeCapacityRemaining
         return merged
@@ -683,8 +690,27 @@ final class AppCoordinator {
         case .internetDirectConnected, .internetBridgedConnected:
             return .connectedToInternet
         case .bleOnly, .internetDisconnected:
+            if meshReachabilityCache[publicKey] == true {
+                return .meshReachable
+            }
             return .outOfRange
         }
+    }
+
+    private func refreshMeshReachabilityCache() async {
+        let directPeerKeys = nearbyPeers.map(\.publicKey)
+        let contacts = contactPeers()
+        var newCache: [Data: Bool] = [:]
+        for contact in contacts {
+            let reachable = await meshTopology.isTransitivelyReachable(
+                target: contact.publicKey,
+                from: directPeerKeys
+            )
+            if reachable {
+                newCache[contact.publicKey] = true
+            }
+        }
+        meshReachabilityCache = newCache
     }
 
     func updateDisplayName(_ newValue: String?) {
@@ -2019,7 +2045,7 @@ final class AppCoordinator {
         guard let relayClient else { return }
 
         let candidates = nearbyPeers
-            .filter { $0.publicKey != identity.publicKey.rawRepresentation }
+            .filter { $0.publicKey != identity.publicKey.rawRepresentation && !$0.isMeshNode }
             .map { peer in
                 BridgeCandidate(
                     publicKey: peer.publicKey,
@@ -2290,6 +2316,8 @@ extension AppCoordinator: BLEManagerDelegate {
     nonisolated func bleManager(_ manager: BLEManager, didLosePeer publicKey: Data) {
         Task { @MainActor in
             nearbyPeers.removeAll(where: { $0.publicKey == publicKey })
+            await meshTopology.removeNode(publicKey)
+            await refreshMeshReachabilityCache()
             refreshBridgeCandidates()
             await relayClient?.handleBridgePeerLoss(publicKey)
             await bridgeTunnelBroker?.handlePeerLoss(publicKey)
@@ -2310,6 +2338,18 @@ extension AppCoordinator: BLEManagerDelegate {
                 try? store.updateMessageStatus(id: messageID, status: .failed)
                 markMessagesChanged()
             }
+        }
+    }
+
+    nonisolated func bleManager(_ manager: BLEManager, didReceiveReachability payload: PeerReachabilityPayload) {
+        Task { @MainActor in
+            await meshTopology.update(
+                sender: payload.senderPublicKey,
+                reachablePeers: payload.reachablePeers,
+                timestamp: payload.timestamp
+            )
+            await meshTopology.pruneStale()
+            await refreshMeshReachabilityCache()
         }
     }
 

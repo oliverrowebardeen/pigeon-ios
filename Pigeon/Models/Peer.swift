@@ -14,6 +14,7 @@ nonisolated struct Peer: Identifiable, Hashable, Sendable {
     var isSaved: Bool
     var bridgeProtocolVersion: Int? = nil
     var bridgeEnabled: Bool = false
+    var isMeshNode: Bool = false
     var relayReachable: Bool = false
     var bridgeCapacityRemaining: Int? = nil
 }

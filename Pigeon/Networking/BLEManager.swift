@@ -10,6 +10,7 @@ protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didLosePeer publicKey: Data)
     func bleManager(_ manager: BLEManager, didDeliverMessage messageID: UUID)
     func bleManager(_ manager: BLEManager, didFailMessage messageID: UUID)
+    func bleManager(_ manager: BLEManager, didReceiveReachability payload: PeerReachabilityPayload)
     func bleManagerDidUpdateState(_ manager: BLEManager)
 }
 
@@ -52,6 +53,7 @@ final class BLEManager: NSObject {
     var identityCharacteristic: CBMutableCharacteristic!
     var ackCharacteristic: CBMutableCharacteristic!
     var bridgeControlCharacteristic: CBMutableCharacteristic!
+    var reachabilityCharacteristic: CBMutableCharacteristic!
 
     // MARK: - Central role state
 
@@ -62,6 +64,7 @@ final class BLEManager: NSObject {
     var peripheralMessageChars: [UUID: CBCharacteristic] = [:]
     var peripheralACKChars: [UUID: CBCharacteristic] = [:]
     var peripheralBridgeControlChars: [UUID: CBCharacteristic] = [:]
+    var peripheralReachabilityChars: [UUID: CBCharacteristic] = [:]
     let reconnectDelaySeconds: TimeInterval = 1.0
     let reconnectAttemptIntervalSeconds: TimeInterval = 2.0
     var lastConnectAttemptAt: [UUID: Date] = [:]
@@ -84,6 +87,8 @@ final class BLEManager: NSObject {
 
     var nearbyPeers: [Data: Peer] = [:]
     var currentDisplayName: String?
+    private var reachabilityBroadcastTimer: Timer?
+    private var seenReachabilityAds: [ReachabilityAdID: Date] = [:]
     var bridgeEnabled = true
     var bridgeRelayReachable = false
     var bridgeCapacityRemaining: Int?
@@ -127,11 +132,14 @@ final class BLEManager: NSObject {
         )
 
         startReassemblyPurgeTimer()
+        startReachabilityBroadcastTimer()
     }
 
     func stop() {
         reassemblyPurgeTimer?.invalidate()
         reassemblyPurgeTimer = nil
+        reachabilityBroadcastTimer?.invalidate()
+        reachabilityBroadcastTimer = nil
 
         if centralManager?.isScanning == true {
             centralManager.stopScan()
@@ -152,11 +160,13 @@ final class BLEManager: NSObject {
         peripheralMessageChars.removeAll()
         peripheralACKChars.removeAll()
         peripheralBridgeControlChars.removeAll()
+        peripheralReachabilityChars.removeAll()
         lastConnectAttemptAt.removeAll()
         reassemblyBuffers.removeAll()
         bridgeReassemblyBuffers.removeAll()
         bridgePacketSources.removeAll()
         nearbyPeers.removeAll()
+        seenReachabilityAds.removeAll()
         bridgePeerCentrals.removeAll()
         subscribedBridgeCentrals.removeAll()
         state = .idle
@@ -339,8 +349,15 @@ final class BLEManager: NSObject {
             permissions: [.writeable]
         )
 
+        reachabilityCharacteristic = CBMutableCharacteristic(
+            type: BLEConstants.reachabilityCharUUID,
+            properties: [.read, .write, .writeWithoutResponse, .notify],
+            value: nil,
+            permissions: [.readable, .writeable]
+        )
+
         let service = CBMutableService(type: BLEConstants.serviceUUID, primary: true)
-        service.characteristics = [identityCharacteristic, messageCharacteristic, ackCharacteristic, bridgeControlCharacteristic]
+        service.characteristics = [identityCharacteristic, messageCharacteristic, ackCharacteristic, bridgeControlCharacteristic, reachabilityCharacteristic]
         pigeonService = service
         peripheralManager.add(service)
     }
@@ -650,6 +667,84 @@ final class BLEManager: NSObject {
     private func purgeExpiredBuffers() {
         reassemblyBuffers = reassemblyBuffers.filter { !$0.value.isExpired }
         bridgeReassemblyBuffers = bridgeReassemblyBuffers.filter { !$0.value.isExpired }
+        let adCutoff = Date().addingTimeInterval(-BLEConstants.reachabilityStaleTimeout)
+        seenReachabilityAds = seenReachabilityAds.filter { $0.value > adCutoff }
+    }
+
+    // MARK: - Reachability broadcast
+
+    private func startReachabilityBroadcastTimer() {
+        DispatchQueue.main.async { [weak self] in
+            self?.reachabilityBroadcastTimer = Timer.scheduledTimer(
+                withTimeInterval: BLEConstants.reachabilityBroadcastInterval,
+                repeats: true
+            ) { [weak self] _ in
+                self?.bleQueue.async {
+                    self?.broadcastOwnReachability()
+                }
+            }
+        }
+    }
+
+    func broadcastOwnReachability() {
+        let peerKeys = Array(nearbyPeers.keys)
+        let payload = PeerReachabilityPayload(
+            senderPublicKey: identity.publicKey.rawRepresentation,
+            reachablePeers: peerKeys,
+            hopCount: 0,
+            ttl: BLEConstants.reachabilityTTL,
+            timestamp: Date()
+        )
+
+        guard let data = try? MessageProtocol.encodeReachability(payload) else { return }
+
+        // Update characteristic value for future reads
+        reachabilityCharacteristic?.value = data
+
+        // Notify subscribed centrals (peripheral role)
+        if let reachChar = reachabilityCharacteristic, peripheralManager?.state == .poweredOn {
+            peripheralManager.updateValue(data, for: reachChar, onSubscribedCentrals: nil)
+        }
+
+        // Write to connected peripherals (central role)
+        for (peripheralID, peripheral) in connectedPeripherals {
+            if let reachChar = peripheralReachabilityChars[peripheralID] {
+                peripheral.writeValue(data, for: reachChar, type: .withResponse)
+            }
+        }
+    }
+
+    func handleReceivedReachability(_ data: Data, fromPeerID senderPeripheralID: UUID?) {
+        guard let payload = try? MessageProtocol.decodeReachability(data) else { return }
+
+        let adID = ReachabilityAdID(senderPublicKey: payload.senderPublicKey, timestamp: payload.timestamp)
+        guard seenReachabilityAds[adID] == nil else { return }
+        seenReachabilityAds[adID] = Date()
+
+        // Notify delegate
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            delegate?.bleManager(self, didReceiveReachability: payload)
+        }
+
+        // Forward if within TTL
+        guard payload.hopCount < payload.ttl else { return }
+        var forwarded = payload
+        forwarded.hopCount += 1
+        guard let forwardedData = try? MessageProtocol.encodeReachability(forwarded) else { return }
+
+        // Forward to connected peripherals (central role), except source
+        for (peripheralID, peripheral) in connectedPeripherals {
+            if peripheralID == senderPeripheralID { continue }
+            if let reachChar = peripheralReachabilityChars[peripheralID] {
+                peripheral.writeValue(forwardedData, for: reachChar, type: .withResponse)
+            }
+        }
+
+        // Forward to subscribed centrals (peripheral role)
+        if let reachChar = reachabilityCharacteristic, peripheralManager?.state == .poweredOn {
+            peripheralManager.updateValue(forwardedData, for: reachChar, onSubscribedCentrals: nil)
+        }
     }
 
     // MARK: - Internal: State update
@@ -679,4 +774,9 @@ final class BLEManager: NSObject {
             }
         }
     }
+}
+
+nonisolated struct ReachabilityAdID: Hashable, Sendable {
+    let senderPublicKey: Data
+    let timestamp: Date
 }

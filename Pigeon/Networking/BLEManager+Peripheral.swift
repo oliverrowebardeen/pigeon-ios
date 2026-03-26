@@ -40,12 +40,35 @@ extension BLEManager: CBPeripheralManagerDelegate {
                 displayName: currentDisplayName,
                 bridgeProtocolVersion: BridgeProtocol.version,
                 bridgeEnabled: bridgeEnabled,
+                isMeshNode: false,
                 relayReachable: bridgeRelayReachable,
                 bridgeCapacityRemaining: bridgeCapacityRemaining
             )
 
             do {
                 let data = try MessageProtocol.encodePeerIdentity(payload)
+                if request.offset > data.count {
+                    peripheral.respond(to: request, withResult: .invalidOffset)
+                    return
+                }
+                request.value = data.subdata(in: request.offset ..< data.count)
+                peripheral.respond(to: request, withResult: .success)
+            } catch {
+                peripheral.respond(to: request, withResult: .unlikelyError)
+            }
+
+        case BLEConstants.reachabilityCharUUID:
+            let peerKeys = Array(nearbyPeers.keys)
+            let payload = PeerReachabilityPayload(
+                senderPublicKey: identity.publicKey.rawRepresentation,
+                reachablePeers: peerKeys,
+                hopCount: 0,
+                ttl: BLEConstants.reachabilityTTL,
+                timestamp: Date()
+            )
+
+            do {
+                let data = try MessageProtocol.encodeReachability(payload)
                 if request.offset > data.count {
                     peripheral.respond(to: request, withResult: .invalidOffset)
                     return
@@ -82,6 +105,10 @@ extension BLEManager: CBPeripheralManagerDelegate {
 
             case BLEConstants.bridgeControlCharUUID:
                 processIncomingBridgeChunk(data, source: .central(request.central))
+                peripheral.respond(to: request, withResult: .success)
+
+            case BLEConstants.reachabilityCharUUID:
+                handleReceivedReachability(data, fromPeerID: nil)
                 peripheral.respond(to: request, withResult: .success)
 
             default:
@@ -131,6 +158,8 @@ extension BLEManager: CBPeripheralManagerDelegate {
                             ackCharacteristic = mutable
                         case BLEConstants.bridgeControlCharUUID:
                             bridgeControlCharacteristic = mutable
+                        case BLEConstants.reachabilityCharUUID:
+                            reachabilityCharacteristic = mutable
                         default:
                             break
                         }

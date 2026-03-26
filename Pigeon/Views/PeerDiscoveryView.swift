@@ -11,7 +11,7 @@ struct PeerDiscoveryView: View {
             ZStack {
                 PigeonTheme.background.ignoresSafeArea()
 
-                if coordinator.nearbyPeers.isEmpty {
+                if coordinator.nearbyContacts.isEmpty {
                     scanningState
                 } else {
                     peerList
@@ -65,8 +65,25 @@ struct PeerDiscoveryView: View {
 
     private var peerList: some View {
         List {
+            if coordinator.connectedMeshNodeCount > 0 {
+                Section {
+                    HStack(spacing: 8) {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .foregroundColor(PigeonTheme.accent)
+                        Text("Connected to \(coordinator.connectedMeshNodeCount) mesh \(coordinator.connectedMeshNodeCount == 1 ? "node" : "nodes")")
+                            .font(PigeonTheme.captionFont)
+                            .foregroundColor(PigeonTheme.textSecondary)
+                        Spacer()
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 8, height: 8)
+                    }
+                    .listRowBackground(PigeonTheme.surface)
+                }
+            }
+
             Section {
-                ForEach(coordinator.nearbyPeers) { peer in
+                ForEach(coordinator.nearbyContacts) { peer in
                     PeerRowView(peer: peer) {
                         startConversation(with: peer)
                     }
@@ -76,7 +93,7 @@ struct PeerDiscoveryView: View {
                 HStack {
                     Text("Nearby")
                     Spacer()
-                    Text("\(coordinator.nearbyPeers.count)")
+                    Text("\(coordinator.nearbyContacts.count)")
                         .foregroundColor(PigeonTheme.accent)
                 }
             }

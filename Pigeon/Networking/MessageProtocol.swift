@@ -40,8 +40,17 @@ nonisolated struct PeerIdentityPayload: Codable, Hashable, Sendable {
     let displayName: String?
     let bridgeProtocolVersion: Int?
     let bridgeEnabled: Bool?
+    let isMeshNode: Bool?
     let relayReachable: Bool?
     let bridgeCapacityRemaining: Int?
+}
+
+nonisolated struct PeerReachabilityPayload: Codable, Hashable, Sendable {
+    let senderPublicKey: Data
+    let reachablePeers: [Data]
+    var hopCount: UInt8
+    let ttl: UInt8
+    let timestamp: Date
 }
 
 nonisolated struct DeliveryACK: Codable, Hashable, Sendable {
@@ -120,6 +129,14 @@ nonisolated enum MessageProtocol {
 
     static func decodeACK(_ data: Data) throws -> DeliveryACK {
         try ackDecoder.decode(DeliveryACK.self, from: data)
+    }
+
+    static func encodeReachability(_ payload: PeerReachabilityPayload) throws -> Data {
+        try envelopeEncoder.encode(payload)
+    }
+
+    static func decodeReachability(_ data: Data) throws -> PeerReachabilityPayload {
+        try envelopeDecoder.decode(PeerReachabilityPayload.self, from: data)
     }
 
     static func chunkEnvelope(

@@ -106,6 +106,8 @@ private struct ContactRowView: View {
         switch reachability {
         case .inRange:
             return "In Range"
+        case .meshReachable:
+            return "Mesh Reachable"
         case .connectedToInternet:
             return "Connected to Internet"
         case .outOfRange:
@@ -117,6 +119,8 @@ private struct ContactRowView: View {
         switch reachability {
         case .inRange:
             return PigeonTheme.success
+        case .meshReachable:
+            return PigeonTheme.accent
         case .connectedToInternet:
             return PigeonTheme.internet
         case .outOfRange:
@@ -128,6 +132,8 @@ private struct ContactRowView: View {
         switch reachability {
         case .inRange:
             return "antenna.radiowaves.left.and.right"
+        case .meshReachable:
+            return "point.3.connected.trianglepath.dotted"
         case .connectedToInternet:
             return "globe"
         case .outOfRange:
