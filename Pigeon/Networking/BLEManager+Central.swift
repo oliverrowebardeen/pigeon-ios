@@ -111,6 +111,9 @@ extension BLEManager: CBCentralManagerDelegate {
         peripheralBridgeControlChars.removeValue(forKey: peripheralID)
         peripheralReachabilityChars.removeValue(forKey: peripheralID)
 
+        // Broadcast updated reachability (our peer list changed)
+        broadcastOwnReachability()
+
         // Attempt reconnection immediately so iOS can wake us on reconnection events while locked.
         if central.state == .poweredOn {
             bleQueue.asyncAfter(deadline: .now() + reconnectDelaySeconds) { [weak self, weak central] in
