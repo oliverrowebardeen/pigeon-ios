@@ -14,9 +14,11 @@ actor MeshTopology {
     }
 
     func update(sender: Data, reachablePeers: [Data], timestamp: Date) {
+        // Guard against clock-skewed peers sending future timestamps
+        let clampedTimestamp = min(timestamp, Date())
         graph[sender] = NodeReachability(
             reachablePeers: Set(reachablePeers),
-            lastUpdated: timestamp
+            lastUpdated: clampedTimestamp
         )
     }
 
@@ -33,9 +35,11 @@ actor MeshTopology {
     func isTransitivelyReachable(target: Data, from directPeers: [Data]) -> Bool {
         var visited = Set<Data>()
         var queue = directPeers
+        var head = 0
 
-        while !queue.isEmpty {
-            let current = queue.removeFirst()
+        while head < queue.count {
+            let current = queue[head]
+            head += 1
             if current == target { return true }
             guard !visited.contains(current) else { continue }
             visited.insert(current)
