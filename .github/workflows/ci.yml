@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build Pigeon (Xcode ${{ matrix.xcode }})
+    runs-on: macos-15
+    strategy:
+      matrix:
+        xcode: ["26.0"] # Placeholder based on project requirements
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer || true
+
+      - name: List available SDKs
+        run: xcodebuild -showsdks
+
+      - name: Build
+        run: xcodebuild -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
