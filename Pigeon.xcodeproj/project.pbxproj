@@ -6,9 +6,20 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		AABB00062F4A00000007E79D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 962BA5602F4A827B0007E79D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 962BA5672F4A827B0007E79D;
+			remoteInfo = Pigeon;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		962BA5682F4A827B0007E79D /* Pigeon.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pigeon.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		962BA5802F4A827D0007E79D /* Pigeon.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Pigeon.xcconfig; sourceTree = "<group>"; };
+		AABB00012F4A00000007E79D /* PigeonTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PigeonTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -17,10 +28,22 @@
 			path = Pigeon;
 			sourceTree = "<group>";
 		};
+		AABB00022F4A00000007E79D /* PigeonTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PigeonTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		962BA5652F4A827B0007E79D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AABB00032F4A00000007E79D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -35,6 +58,7 @@
 			children = (
 				962BA5802F4A827D0007E79D /* Pigeon.xcconfig */,
 				962BA56A2F4A827B0007E79D /* Pigeon */,
+				AABB00022F4A00000007E79D /* PigeonTests */,
 				962BA5692F4A827B0007E79D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -43,6 +67,7 @@
 			isa = PBXGroup;
 			children = (
 				962BA5682F4A827B0007E79D /* Pigeon.app */,
+				AABB00012F4A00000007E79D /* PigeonTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -72,6 +97,27 @@
 			productReference = 962BA5682F4A827B0007E79D /* Pigeon.app */;
 			productType = "com.apple.product-type.application";
 		};
+		AABB00082F4A00000007E79D /* PigeonTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AABB000B2F4A00000007E79D /* Build configuration list for PBXNativeTarget "PigeonTests" */;
+			buildPhases = (
+				AABB00042F4A00000007E79D /* Sources */,
+				AABB00032F4A00000007E79D /* Frameworks */,
+				AABB00052F4A00000007E79D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AABB00072F4A00000007E79D /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AABB00022F4A00000007E79D /* PigeonTests */,
+			);
+			name = PigeonTests;
+			productName = PigeonTests;
+			productReference = AABB00012F4A00000007E79D /* PigeonTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -84,6 +130,10 @@
 				TargetAttributes = {
 					962BA5672F4A827B0007E79D = {
 						CreatedOnToolsVersion = 26.1.1;
+					};
+					AABB00082F4A00000007E79D = {
+						CreatedOnToolsVersion = 26.1.1;
+						TestTargetID = 962BA5672F4A827B0007E79D;
 					};
 				};
 			};
@@ -102,12 +152,20 @@
 			projectRoot = "";
 			targets = (
 				962BA5672F4A827B0007E79D /* Pigeon */,
+				AABB00082F4A00000007E79D /* PigeonTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		962BA5662F4A827B0007E79D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AABB00052F4A00000007E79D /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -124,7 +182,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AABB00042F4A00000007E79D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AABB00072F4A00000007E79D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 962BA5672F4A827B0007E79D /* Pigeon */;
+			targetProxy = AABB00062F4A00000007E79D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		962BA5712F4A827D0007E79D /* Debug */ = {
@@ -324,6 +397,48 @@
 			};
 			name = Release;
 		};
+		AABB00092F4A00000007E79D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 962BA5802F4A827D0007E79D /* Pigeon.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PigeonTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Pigeon.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Pigeon";
+			};
+			name = Debug;
+		};
+		AABB000A2F4A00000007E79D /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 962BA5802F4A827D0007E79D /* Pigeon.xcconfig */;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.PigeonTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Pigeon.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Pigeon";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -341,6 +456,15 @@
 			buildConfigurations = (
 				962BA5742F4A827D0007E79D /* Debug */,
 				962BA5752F4A827D0007E79D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AABB000B2F4A00000007E79D /* Build configuration list for PBXNativeTarget "PigeonTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AABB00092F4A00000007E79D /* Debug */,
+				AABB000A2F4A00000007E79D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
