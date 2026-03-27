@@ -90,7 +90,7 @@ final class BLEManager: NSObject {
     var currentDisplayName: String?
     private var reachabilityBroadcastTimer: Timer?
     private var seenReachabilityAds: [ReachabilityAdID: Date] = [:]
-    var hasInternetGateway = false
+    private(set) var hasInternetGateway = false
     var bridgeEnabled = true
     var bridgeRelayReachable = false
     var bridgeCapacityRemaining: Int?
@@ -487,7 +487,7 @@ final class BLEManager: NSObject {
         // Notify delegate so gateway nodes can upload to relay
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            delegate?.bleManager(self, didRelayEnvelope: envelope)
+            delegate?.bleManager(self, didRelayEnvelope: forwarded)
         }
     }
 

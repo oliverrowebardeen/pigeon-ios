@@ -501,10 +501,12 @@ final class AppCoordinator {
         return isPeerNearby(publicKey: recipientPublicKey) || !nearbyPeers.isEmpty
     }
 
+    private var hasInternetConnectivity: Bool {
+        transportState == .internetDirectConnected || transportState == .internetBridgedConnected
+    }
+
     private func hasAnyRealtimeDeliveryPath(to recipientPublicKey: Data) -> Bool {
-        canAttemptBLEMeshDelivery(to: recipientPublicKey) ||
-            transportState == .internetDirectConnected ||
-            transportState == .internetBridgedConnected
+        canAttemptBLEMeshDelivery(to: recipientPublicKey) || hasInternetConnectivity
     }
 
     private func outboundStatusAfterSend(to recipientPublicKey: Data, usedRelay: Bool) -> MessageStatus {
@@ -1888,11 +1890,9 @@ final class AppCoordinator {
         }
 
         // 3. Peer is off-mesh — we need internet
-        let relayPathActive = transportState == .internetDirectConnected ||
-            transportState == .internetBridgedConnected
 
         // 3a. We have internet — send to relay directly
-        if relayPathActive, let relayClient {
+        if hasInternetConnectivity, let relayClient {
             do {
                 try await relayClient.sendEnvelope(envelope)
                 return true
@@ -2363,9 +2363,7 @@ extension AppCoordinator: BLEManagerDelegate {
     nonisolated func bleManager(_ manager: BLEManager, didRelayEnvelope envelope: MessageEnvelope) {
         Task { @MainActor in
             // Only act if we have internet connectivity
-            guard let relayClient,
-                  transportState == .internetDirectConnected || transportState == .internetBridgedConnected
-            else { return }
+            guard let relayClient, hasInternetConnectivity else { return }
 
             // Don't upload if the recipient is reachable via mesh — mesh-first
             let directPeerKeys = nearbyPeers.map(\.publicKey)
@@ -2376,7 +2374,11 @@ extension AppCoordinator: BLEManagerDelegate {
             guard !recipientMeshReachable else { return }
 
             // We're a gateway node — upload to relay for off-mesh recipient
-            try? await relayClient.sendEnvelope(envelope)
+            do {
+                try await relayClient.sendEnvelope(envelope)
+            } catch {
+                print("[Pigeon] Gateway relay forwarding failed: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -2419,10 +2421,9 @@ extension AppCoordinator: InternetRelayClientDelegate {
                 bridgeDirectUpgradeNotBefore = nil
             }
 
-            let hasInternet = state == .internetDirectConnected || state == .internetBridgedConnected
-            bleManager.updateInternetGatewayStatus(hasInternet)
+            bleManager.updateInternetGatewayStatus(hasInternetConnectivity)
 
-            let routeRecovered = hasInternet && state != previousState
+            let routeRecovered = hasInternetConnectivity && state != previousState
             if routeRecovered {
                 scheduleQueuedOutboundRetry()
             }

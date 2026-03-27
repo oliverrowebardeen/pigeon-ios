@@ -88,8 +88,4 @@ actor MeshTopology {
         return nil
     }
 
-    /// Whether any node in the reachable mesh has internet.
-    func hasReachableGateway(from directPeers: [Data]) -> Bool {
-        firstHopToGateway(from: directPeers) != nil
-    }
 }

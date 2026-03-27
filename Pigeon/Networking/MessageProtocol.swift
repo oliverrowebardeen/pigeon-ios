@@ -45,13 +45,29 @@ nonisolated struct PeerIdentityPayload: Codable, Hashable, Sendable {
     let bridgeCapacityRemaining: Int?
 }
 
-nonisolated struct PeerReachabilityPayload: Codable, Hashable, Sendable {
+nonisolated struct PeerReachabilityPayload: Hashable, Sendable {
     let senderPublicKey: Data
     let reachablePeers: [Data]
     let hasInternetGateway: Bool
     var hopCount: UInt8
     let ttl: UInt8
     let timestamp: Date
+}
+
+extension PeerReachabilityPayload: Codable {
+    enum CodingKeys: String, CodingKey {
+        case senderPublicKey, reachablePeers, hasInternetGateway, hopCount, ttl, timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        senderPublicKey = try container.decode(Data.self, forKey: .senderPublicKey)
+        reachablePeers = try container.decode([Data].self, forKey: .reachablePeers)
+        hasInternetGateway = try container.decodeIfPresent(Bool.self, forKey: .hasInternetGateway) ?? false
+        hopCount = try container.decode(UInt8.self, forKey: .hopCount)
+        ttl = try container.decode(UInt8.self, forKey: .ttl)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+    }
 }
 
 nonisolated struct DeliveryACK: Codable, Hashable, Sendable {
