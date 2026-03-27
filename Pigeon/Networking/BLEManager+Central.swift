@@ -293,7 +293,12 @@ extension BLEManager: CBPeripheralDelegate {
             // Broadcast updated reachability (our peer list changed)
             broadcastOwnReachability()
         } catch {
-            // Malformed identity payload
+            print("[Pigeon] Failed to decode identity from \(peripheral.identifier): \(error)")
+            if let raw = String(data: data, encoding: .utf8) {
+                print("[Pigeon] Raw identity data: \(raw)")
+            } else {
+                print("[Pigeon] Raw identity data (\(data.count) bytes): \(data.prefix(128).map { String(format: "%02x", $0) }.joined())")
+            }
         }
     }
 }
