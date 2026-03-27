@@ -388,6 +388,9 @@ final class BLEManager: NSObject {
                   let messageChar = peripheralMessageChars[peripheralID] else { continue }
             sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
         }
+
+        // Also broadcast to centrals connected via peripheral role (e.g. ESP32 nodes)
+        broadcastEnvelopeToSubscribers(envelope)
     }
 
     func sendEnvelope(_ envelope: MessageEnvelope, to peripheral: CBPeripheral, characteristic: CBCharacteristic) {
