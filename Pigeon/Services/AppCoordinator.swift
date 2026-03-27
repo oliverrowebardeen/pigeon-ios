@@ -2382,6 +2382,34 @@ extension AppCoordinator: BLEManagerDelegate {
         }
     }
 
+    nonisolated func bleManager(_ manager: BLEManager, didReceiveMeshPeers pigeonIDs: [String], from peripheralID: UUID) {
+        // Capture the node's public key from the BLE thread's map
+        let nodePublicKey = manager.peripheralPeerMap[peripheralID]
+
+        Task { @MainActor in
+            guard let nodePublicKey else { return }
+
+            var resolvedKeys: [Data] = []
+            for pigeonID in pigeonIDs {
+                guard pigeonID != identity.pigeonID else { continue }
+                if let publicKey = try? keyStore.loadKnownPeerPublicKey(pigeonID: pigeonID) {
+                    resolvedKeys.append(publicKey)
+                }
+            }
+
+            guard !resolvedKeys.isEmpty else { return }
+
+            // The mesh node can reach these peers via LoRa
+            await meshTopology.update(
+                sender: nodePublicKey,
+                reachablePeers: resolvedKeys,
+                hasInternetGateway: false,
+                timestamp: Date()
+            )
+            await refreshMeshReachabilityCache()
+        }
+    }
+
     nonisolated func bleManagerDidUpdateState(_ manager: BLEManager) {
         Task { @MainActor in
             bleState = manager.state
