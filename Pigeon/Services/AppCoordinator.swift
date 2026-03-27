@@ -2382,13 +2382,8 @@ extension AppCoordinator: BLEManagerDelegate {
         }
     }
 
-    nonisolated func bleManager(_ manager: BLEManager, didReceiveMeshPeers pigeonIDs: [String], from peripheralID: UUID) {
-        // Capture the node's public key from the BLE thread's map
-        let nodePublicKey = manager.peripheralPeerMap[peripheralID]
-
+    nonisolated func bleManager(_ manager: BLEManager, didReceiveMeshPeers pigeonIDs: [String], fromNodeWithPublicKey nodePublicKey: Data) {
         Task { @MainActor in
-            guard let nodePublicKey else { return }
-
             var resolvedKeys: [Data] = []
             for pigeonID in pigeonIDs {
                 guard pigeonID != identity.pigeonID else { continue }
@@ -2406,6 +2401,7 @@ extension AppCoordinator: BLEManagerDelegate {
                 hasInternetGateway: false,
                 timestamp: Date()
             )
+            await meshTopology.pruneStale()
             await refreshMeshReachabilityCache()
         }
     }

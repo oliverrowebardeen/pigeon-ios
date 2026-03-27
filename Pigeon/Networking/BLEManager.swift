@@ -12,7 +12,7 @@ protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didFailMessage messageID: UUID)
     func bleManager(_ manager: BLEManager, didReceiveReachability payload: PeerReachabilityPayload)
     func bleManager(_ manager: BLEManager, didRelayEnvelope envelope: MessageEnvelope)
-    func bleManager(_ manager: BLEManager, didReceiveMeshPeers pigeonIDs: [String], from peripheralID: UUID)
+    func bleManager(_ manager: BLEManager, didReceiveMeshPeers pigeonIDs: [String], fromNodeWithPublicKey nodePublicKey: Data)
     func bleManagerDidUpdateState(_ manager: BLEManager)
 }
 
@@ -636,15 +636,20 @@ final class BLEManager: NSObject {
 
         switch type {
         case "peers":
-            guard let pigeonIDs = json["pigeonIDs"] as? [String] else { return true }
+            guard let pigeonIDs = json["pigeonIDs"] as? [String] else {
+                print("[Pigeon] Malformed mesh node 'peers' message: missing pigeonIDs")
+                return true
+            }
+            // Resolve the node's public key on bleQueue (current queue) to avoid data race
             let peripheralID: UUID?
             if case .peripheral(let id) = source { peripheralID = id } else { peripheralID = nil }
-            guard let peripheralID else { return true }
+            guard let peripheralID,
+                  let nodePublicKey = peripheralPeerMap[peripheralID] else { return true }
 
             print("[Pigeon] Mesh node \(peripheralID) reports peers: \(pigeonIDs)")
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                delegate?.bleManager(self, didReceiveMeshPeers: pigeonIDs, from: peripheralID)
+                delegate?.bleManager(self, didReceiveMeshPeers: pigeonIDs, fromNodeWithPublicKey: nodePublicKey)
             }
 
         default:
@@ -655,6 +660,7 @@ final class BLEManager: NSObject {
     }
 
     /// Registers this device's pigeonID with a mesh node after connecting.
+    /// Called from BLEManager+Central after identity handshake with a mesh node.
     func registerWithMeshNode(peripheralID: UUID) {
         bleQueue.async { [weak self] in
             guard let self,
