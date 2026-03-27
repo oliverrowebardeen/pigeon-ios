@@ -12,6 +12,7 @@ protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didFailMessage messageID: UUID)
     func bleManager(_ manager: BLEManager, didReceiveReachability payload: PeerReachabilityPayload)
     func bleManager(_ manager: BLEManager, didRelayEnvelope envelope: MessageEnvelope)
+    func bleManager(_ manager: BLEManager, didReceiveMeshPeers pigeonIDs: [String], fromNodeWithPublicKey nodePublicKey: Data)
     func bleManagerDidUpdateState(_ manager: BLEManager)
 }
 
@@ -586,6 +587,11 @@ final class BLEManager: NSObject {
     }
 
     func processIncomingBridgeChunk(_ data: Data, source: BridgePacketSource) {
+        // Try plain JSON first (mesh node protocol)
+        if handleMeshNodeMessage(data, source: source) {
+            return
+        }
+
         do {
             let packet = try MessageProtocol.decodePacket(data)
             let header = packet.header
@@ -615,6 +621,60 @@ final class BLEManager: NSObject {
             }
         } catch {
             // Drop malformed bridge chunks.
+        }
+    }
+
+    // MARK: - Mesh Node Protocol
+
+    /// Handles plain JSON messages from ESP32 mesh nodes on bridge control.
+    /// Returns true if the data was a mesh node message, false to fall through to chunked processing.
+    private func handleMeshNodeMessage(_ data: Data, source: BridgePacketSource) -> Bool {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = json["type"] as? String else {
+            return false
+        }
+
+        switch type {
+        case "peers":
+            guard let pigeonIDs = json["pigeonIDs"] as? [String] else {
+                print("[Pigeon] Malformed mesh node 'peers' message: missing pigeonIDs")
+                return true
+            }
+            // Resolve the node's public key on bleQueue (current queue) to avoid data race
+            let peripheralID: UUID?
+            if case .peripheral(let id) = source { peripheralID = id } else { peripheralID = nil }
+            guard let peripheralID,
+                  let nodePublicKey = peripheralPeerMap[peripheralID] else { return true }
+
+            print("[Pigeon] Mesh node \(peripheralID) reports peers: \(pigeonIDs)")
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                delegate?.bleManager(self, didReceiveMeshPeers: pigeonIDs, fromNodeWithPublicKey: nodePublicKey)
+            }
+
+        default:
+            print("[Pigeon] Unknown mesh node message type: \(type)")
+        }
+
+        return true
+    }
+
+    /// Registers this device's pigeonID with a mesh node after connecting.
+    /// Called from BLEManager+Central after identity handshake with a mesh node.
+    func registerWithMeshNode(peripheralID: UUID) {
+        bleQueue.async { [weak self] in
+            guard let self,
+                  let peripheral = connectedPeripherals[peripheralID],
+                  let bridgeChar = peripheralBridgeControlChars[peripheralID] else { return }
+
+            let message: [String: String] = [
+                "type": "register",
+                "pigeonID": identity.pigeonID
+            ]
+
+            guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
+            peripheral.writeValue(data, for: bridgeChar, type: .withResponse)
+            print("[Pigeon] Registered pigeonID with mesh node \(peripheralID)")
         }
     }
 

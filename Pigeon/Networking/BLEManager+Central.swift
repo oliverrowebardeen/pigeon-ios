@@ -290,6 +290,11 @@ extension BLEManager: CBPeripheralDelegate {
             // Send any pending messages for this peer
             sendPendingMessages(toPeerWithPublicKey: payload.publicKey, peripheralID: peripheralID)
 
+            // Register with mesh nodes so they broadcast our pigeonID over LoRa
+            if peer.isMeshNode {
+                registerWithMeshNode(peripheralID: peripheralID)
+            }
+
             // Broadcast updated reachability (our peer list changed)
             broadcastOwnReachability()
         } catch {
