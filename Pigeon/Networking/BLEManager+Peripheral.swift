@@ -62,6 +62,7 @@ extension BLEManager: CBPeripheralManagerDelegate {
             let payload = PeerReachabilityPayload(
                 senderPublicKey: identity.publicKey.rawRepresentation,
                 reachablePeers: peerKeys,
+                hasInternetGateway: hasInternetGateway,
                 hopCount: 0,
                 ttl: BLEConstants.reachabilityTTL,
                 timestamp: Date()

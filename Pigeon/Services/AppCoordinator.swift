@@ -686,13 +686,15 @@ final class AppCoordinator {
             return .inRange
         }
 
+        // Mesh-first: prefer mesh over internet when peer is reachable via mesh
+        if meshReachabilityCache[publicKey] == true {
+            return .meshReachable
+        }
+
         switch transportState {
         case .internetDirectConnected, .internetBridgedConnected:
             return .connectedToInternet
         case .bleOnly, .internetDisconnected:
-            if meshReachabilityCache[publicKey] == true {
-                return .meshReachable
-            }
             return .outOfRange
         }
     }
@@ -1873,40 +1875,44 @@ final class AppCoordinator {
         _ envelope: MessageEnvelope,
         recipientPublicKey: Data
     ) async -> Bool {
+        // 1. Peer is directly connected — send via BLE
         if isPeerNearby(publicKey: recipientPublicKey) {
             bleManager.sendMessage(envelope, to: recipientPublicKey)
             return false
         }
 
-        let canUseBLEMesh = canAttemptBLEMeshDelivery(to: recipientPublicKey)
+        // 2. Peer is mesh-reachable — send via mesh (mesh-first, skip relay)
+        if meshReachabilityCache[recipientPublicKey] == true {
+            bleManager.sendMessage(envelope, to: recipientPublicKey)
+            return false
+        }
+
+        // 3. Peer is off-mesh — we need internet
         let relayPathActive = transportState == .internetDirectConnected ||
             transportState == .internetBridgedConnected
 
-        if canUseBLEMesh {
-            bleManager.sendMessage(envelope, to: recipientPublicKey)
+        // 3a. We have internet — send to relay directly
+        if relayPathActive, let relayClient {
+            do {
+                try await relayClient.sendEnvelope(envelope)
+                return true
+            } catch {
+                // Relay failed, fall through to mesh attempts
+            }
         }
 
-        guard let relayClient else {
-            if !canUseBLEMesh {
-                bleManager.sendMessage(envelope, to: recipientPublicKey)
-            }
+        // 3b. No internet but a gateway exists in the mesh — route toward it
+        let directPeerKeys = nearbyPeers.map(\.publicKey)
+        if let gatewayHop = await meshTopology.firstHopToGateway(from: directPeerKeys) {
+            bleManager.sendMessage(envelope, to: gatewayHop)
             return false
         }
 
-        if canUseBLEMesh {
-            Task {
-                try? await relayClient.sendEnvelope(envelope)
-            }
-            return relayPathActive
-        }
-
-        do {
-            try await relayClient.sendEnvelope(envelope)
-            return true
-        } catch {
+        // 4. No internet, no gateway — flood to mesh and hope
+        if canAttemptBLEMeshDelivery(to: recipientPublicKey) {
             bleManager.sendMessage(envelope, to: recipientPublicKey)
-            return false
         }
+        return false
     }
 
     private func acknowledgeRelayMessage(_ messageID: UUID) async {
@@ -2346,10 +2352,31 @@ extension AppCoordinator: BLEManagerDelegate {
             await meshTopology.update(
                 sender: payload.senderPublicKey,
                 reachablePeers: payload.reachablePeers,
+                hasInternetGateway: payload.hasInternetGateway,
                 timestamp: payload.timestamp
             )
             await meshTopology.pruneStale()
             await refreshMeshReachabilityCache()
+        }
+    }
+
+    nonisolated func bleManager(_ manager: BLEManager, didRelayEnvelope envelope: MessageEnvelope) {
+        Task { @MainActor in
+            // Only act if we have internet connectivity
+            guard let relayClient,
+                  transportState == .internetDirectConnected || transportState == .internetBridgedConnected
+            else { return }
+
+            // Don't upload if the recipient is reachable via mesh — mesh-first
+            let directPeerKeys = nearbyPeers.map(\.publicKey)
+            let recipientMeshReachable = await meshTopology.isTransitivelyReachable(
+                target: envelope.recipientPublicKey,
+                from: directPeerKeys
+            )
+            guard !recipientMeshReachable else { return }
+
+            // We're a gateway node — upload to relay for off-mesh recipient
+            try? await relayClient.sendEnvelope(envelope)
         }
     }
 
@@ -2392,9 +2419,10 @@ extension AppCoordinator: InternetRelayClientDelegate {
                 bridgeDirectUpgradeNotBefore = nil
             }
 
-            let routeRecovered =
-                (state == .internetDirectConnected || state == .internetBridgedConnected) &&
-                state != previousState
+            let hasInternet = state == .internetDirectConnected || state == .internetBridgedConnected
+            bleManager.updateInternetGatewayStatus(hasInternet)
+
+            let routeRecovered = hasInternet && state != previousState
             if routeRecovered {
                 scheduleQueuedOutboundRetry()
             }

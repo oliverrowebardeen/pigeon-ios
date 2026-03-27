@@ -48,6 +48,7 @@ nonisolated struct PeerIdentityPayload: Codable, Hashable, Sendable {
 nonisolated struct PeerReachabilityPayload: Codable, Hashable, Sendable {
     let senderPublicKey: Data
     let reachablePeers: [Data]
+    let hasInternetGateway: Bool
     var hopCount: UInt8
     let ttl: UInt8
     let timestamp: Date

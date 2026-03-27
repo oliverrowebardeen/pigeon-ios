@@ -11,6 +11,7 @@ protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didDeliverMessage messageID: UUID)
     func bleManager(_ manager: BLEManager, didFailMessage messageID: UUID)
     func bleManager(_ manager: BLEManager, didReceiveReachability payload: PeerReachabilityPayload)
+    func bleManager(_ manager: BLEManager, didRelayEnvelope envelope: MessageEnvelope)
     func bleManagerDidUpdateState(_ manager: BLEManager)
 }
 
@@ -89,6 +90,7 @@ final class BLEManager: NSObject {
     var currentDisplayName: String?
     private var reachabilityBroadcastTimer: Timer?
     private var seenReachabilityAds: [ReachabilityAdID: Date] = [:]
+    var hasInternetGateway = false
     var bridgeEnabled = true
     var bridgeRelayReachable = false
     var bridgeCapacityRemaining: Int?
@@ -224,6 +226,14 @@ final class BLEManager: NSObject {
                 CBAdvertisementDataServiceUUIDsKey: [BLEConstants.serviceUUID],
                 CBAdvertisementDataLocalNameKey: currentDisplayName ?? "Pigeon"
             ])
+        }
+    }
+
+    func updateInternetGatewayStatus(_ hasInternet: Bool) {
+        bleQueue.async { [weak self] in
+            guard let self, hasInternetGateway != hasInternet else { return }
+            hasInternetGateway = hasInternet
+            broadcastOwnReachability()
         }
     }
 
@@ -473,6 +483,12 @@ final class BLEManager: NSObject {
 
         // Also notify via peripheral manager to subscribed centrals
         broadcastEnvelopeToSubscribers(forwarded)
+
+        // Notify delegate so gateway nodes can upload to relay
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            delegate?.bleManager(self, didRelayEnvelope: envelope)
+        }
     }
 
     private func sendACKForMessage(_ envelope: MessageEnvelope) {
@@ -691,6 +707,7 @@ final class BLEManager: NSObject {
         let payload = PeerReachabilityPayload(
             senderPublicKey: identity.publicKey.rawRepresentation,
             reachablePeers: peerKeys,
+            hasInternetGateway: hasInternetGateway,
             hopCount: 0,
             ttl: BLEConstants.reachabilityTTL,
             timestamp: Date()
