@@ -13,6 +13,7 @@ protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didReceiveReachability payload: PeerReachabilityPayload)
     func bleManager(_ manager: BLEManager, didRelayEnvelope envelope: MessageEnvelope)
     func bleManager(_ manager: BLEManager, didReceiveMeshPeers pigeonIDs: [String], fromNodeWithPublicKey nodePublicKey: Data)
+    func bleManager(_ manager: BLEManager, didReceiveMeshNodeBridgeStatus status: MeshNodeBridgeStatus, fromNodeWithPublicKey nodePublicKey: Data)
     func bleManagerDidUpdateState(_ manager: BLEManager)
 }
 
@@ -287,6 +288,38 @@ final class BLEManager: NSObject {
         throw BridgeSendError.peerUnavailable
     }
 
+    // MARK: - Mesh Node WiFi Provisioning
+
+    func sendWiFiCredentials(ssid: String, password: String, toMeshNode peripheralID: UUID) {
+        bleQueue.async { [weak self] in
+            guard let self,
+                  let peripheral = connectedPeripherals[peripheralID],
+                  let bridgeChar = peripheralBridgeControlChars[peripheralID] else { return }
+
+            let command: [String: String] = ["ssid": ssid, "pass": password]
+            guard let data = try? JSONSerialization.data(withJSONObject: command) else { return }
+            peripheral.writeValue(data, for: bridgeChar, type: .withResponse)
+            print("[Pigeon] Sent WiFi credentials to mesh node \(peripheralID)")
+        }
+    }
+
+    func peripheralID(forPeerPublicKey publicKey: Data) -> UUID? {
+        bleQueue.sync { peerPeripheralMap[publicKey] }
+    }
+
+    func clearWiFiCredentials(forMeshNode peripheralID: UUID) {
+        bleQueue.async { [weak self] in
+            guard let self,
+                  let peripheral = connectedPeripherals[peripheralID],
+                  let bridgeChar = peripheralBridgeControlChars[peripheralID] else { return }
+
+            let command: [String: String] = ["wifi": "off"]
+            guard let data = try? JSONSerialization.data(withJSONObject: command) else { return }
+            peripheral.writeValue(data, for: bridgeChar, type: .withResponse)
+            print("[Pigeon] Sent WiFi disconnect to mesh node \(peripheralID)")
+        }
+    }
+
     func refreshRadioActivity(forceRestart: Bool = false) {
         bleQueue.async { [weak self] in
             guard let self else { return }
@@ -387,11 +420,42 @@ final class BLEManager: NSObject {
         for (peripheralID, peripheral) in connectedPeripherals {
             guard peripheralPeerMap[peripheralID] != recipientPublicKey,
                   let messageChar = peripheralMessageChars[peripheralID] else { continue }
-            sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
+
+            // Mesh nodes get the routing header so they can bridge to internet
+            if isMeshNode(peripheralID: peripheralID) {
+                sendEnvelopeWithRoutingHeader(envelope, to: peripheral, characteristic: messageChar, recipientPublicKey: recipientPublicKey)
+            } else {
+                sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
+            }
         }
 
         // Also broadcast to centrals connected via peripheral role (e.g. ESP32 nodes)
         broadcastEnvelopeToSubscribers(envelope)
+    }
+
+    private func isMeshNode(peripheralID: UUID) -> Bool {
+        guard let publicKey = peripheralPeerMap[peripheralID] else { return false }
+        return nearbyPeers[publicKey]?.isMeshNode == true
+    }
+
+    private func sendEnvelopeWithRoutingHeader(
+        _ envelope: MessageEnvelope,
+        to peripheral: CBPeripheral,
+        characteristic: CBCharacteristic,
+        recipientPublicKey: Data
+    ) {
+        do {
+            let chunks = try MessageProtocol.chunkEnvelopeWithRoutingHeader(
+                envelope,
+                recipientPublicKey: recipientPublicKey
+            )
+            sendChunks(chunks, to: peripheral, characteristic: characteristic)
+        } catch {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                delegate?.bleManager(self, didFailMessage: envelope.id)
+            }
+        }
     }
 
     func sendEnvelope(_ envelope: MessageEnvelope, to peripheral: CBPeripheral, characteristic: CBCharacteristic) {
@@ -634,15 +698,16 @@ final class BLEManager: NSObject {
             return false
         }
 
+        // Resolve the node's public key on bleQueue (current queue) to avoid data race
+        let peripheralID: UUID?
+        if case .peripheral(let id) = source { peripheralID = id } else { peripheralID = nil }
+
         switch type {
         case "peers":
             guard let pigeonIDs = json["pigeonIDs"] as? [String] else {
                 print("[Pigeon] Malformed mesh node 'peers' message: missing pigeonIDs")
                 return true
             }
-            // Resolve the node's public key on bleQueue (current queue) to avoid data race
-            let peripheralID: UUID?
-            if case .peripheral(let id) = source { peripheralID = id } else { peripheralID = nil }
             guard let peripheralID,
                   let nodePublicKey = peripheralPeerMap[peripheralID] else { return true }
 
@@ -650,6 +715,33 @@ final class BLEManager: NSObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 delegate?.bleManager(self, didReceiveMeshPeers: pigeonIDs, fromNodeWithPublicKey: nodePublicKey)
+            }
+
+        case "bridge_status":
+            guard let bridge = json["bridge"] as? String else {
+                print("[Pigeon] Malformed mesh node 'bridge_status': missing bridge field")
+                return true
+            }
+            guard let peripheralID,
+                  let nodePublicKey = peripheralPeerMap[peripheralID] else { return true }
+
+            let status = MeshNodeBridgeStatus(
+                bridge: bridge,
+                ssid: json["ssid"] as? String,
+                ip: json["ip"] as? String
+            )
+            print("[Pigeon] Mesh node \(peripheralID) bridge status: \(bridge)")
+
+            // Update the peer's bridge state
+            if var peer = nearbyPeers[nodePublicKey] {
+                peer.relayReachable = status.isOnline
+                peer.bridgeEnabled = status.bridge != "no_wifi"
+                nearbyPeers[nodePublicKey] = peer
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    delegate?.bleManager(self, didUpdatePeer: peer)
+                    delegate?.bleManager(self, didReceiveMeshNodeBridgeStatus: status, fromNodeWithPublicKey: nodePublicKey)
+                }
             }
 
         default:
@@ -716,15 +808,25 @@ final class BLEManager: NSObject {
                       let peripheral = connectedPeripherals[peripheralID],
                       let messageChar = peripheralMessageChars[peripheralID] else { return }
 
+                let meshNode = isMeshNode(peripheralID: peripheralID)
+
                 for envelope in pending {
-                    sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
+                    if meshNode {
+                        sendEnvelopeWithRoutingHeader(envelope, to: peripheral, characteristic: messageChar, recipientPublicKey: envelope.recipientPublicKey)
+                    } else {
+                        sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
+                    }
                 }
 
                 for envelope in forwardable {
                     if envelope.senderPublicKey == peerPublicKey { continue }
                     if envelope.recipientPublicKey == peerPublicKey ||
                        envelope.hopCount < envelope.ttl {
-                        sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
+                        if meshNode {
+                            sendEnvelopeWithRoutingHeader(envelope, to: peripheral, characteristic: messageChar, recipientPublicKey: envelope.recipientPublicKey)
+                        } else {
+                            sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
+                        }
                     }
                 }
             }
@@ -854,6 +956,15 @@ final class BLEManager: NSObject {
             }
         }
     }
+}
+
+nonisolated struct MeshNodeBridgeStatus: Sendable {
+    let bridge: String    // "online", "no_wifi", "connecting"
+    let ssid: String?
+    let ip: String?
+
+    var isOnline: Bool { bridge == "online" }
+    var isConnecting: Bool { bridge == "connecting" }
 }
 
 nonisolated struct ReachabilityAdID: Hashable, Sendable {

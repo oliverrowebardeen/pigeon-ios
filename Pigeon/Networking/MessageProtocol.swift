@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 nonisolated struct MessageEnvelope: Codable, Hashable, Sendable {
@@ -156,12 +157,30 @@ nonisolated enum MessageProtocol {
         try envelopeDecoder.decode(PeerReachabilityPayload.self, from: data)
     }
 
+    static let routingHeaderSize = 48
+
     static func chunkEnvelope(
         _ envelope: MessageEnvelope,
         maxChunkPayloadSize: Int = BLEConstants.maxChunkPayloadSize
     ) throws -> [Data] {
         let body = try encodeEnvelope(envelope)
         return try chunk(data: body, messageID: envelope.id, maxChunkPayloadSize: maxChunkPayloadSize)
+    }
+
+    /// Chunks an envelope with a 48-byte routing header prepended.
+    /// The header enables mesh nodes to bridge messages to the relay server.
+    /// Format: [messageID: 16 bytes][SHA-256(recipientPublicKey): 32 bytes][envelope JSON]
+    static func chunkEnvelopeWithRoutingHeader(
+        _ envelope: MessageEnvelope,
+        recipientPublicKey: Data,
+        maxChunkPayloadSize: Int = BLEConstants.maxChunkPayloadSize
+    ) throws -> [Data] {
+        var data = Data(capacity: routingHeaderSize + 512)
+        data.append(contentsOf: envelope.id.byteArray)
+        let hash = SHA256.hash(data: recipientPublicKey)
+        data.append(contentsOf: hash)
+        data.append(try encodeEnvelope(envelope))
+        return try chunk(data: data, messageID: envelope.id, maxChunkPayloadSize: maxChunkPayloadSize)
     }
 
     static func chunk(

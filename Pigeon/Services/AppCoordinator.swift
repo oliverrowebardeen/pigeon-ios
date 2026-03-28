@@ -184,6 +184,20 @@ final class AppCoordinator {
         }
     }
 
+    // MARK: - Mesh Node WiFi Provisioning
+
+    func sendWiFiCredentials(ssid: String, password: String, toMeshNode peer: Peer) {
+        guard let peripheralID = bleManager.peripheralID(forPeerPublicKey: peer.publicKey) else { return }
+        bleManager.sendWiFiCredentials(ssid: ssid, password: password, toMeshNode: peripheralID)
+    }
+
+    func clearWiFiCredentials(forMeshNode peer: Peer) {
+        guard let peripheralID = bleManager.peripheralID(forPeerPublicKey: peer.publicKey) else { return }
+        bleManager.clearWiFiCredentials(forMeshNode: peripheralID)
+    }
+
+    // MARK: - Messaging
+
     func sendMessage(text: String, in conversation: Conversation, replyTo replyTarget: Message? = nil) async throws -> Message {
         switch conversation.kind {
         case .direct:
@@ -2403,6 +2417,15 @@ extension AppCoordinator: BLEManagerDelegate {
             )
             await meshTopology.pruneStale()
             await refreshMeshReachabilityCache()
+        }
+    }
+
+    nonisolated func bleManager(_ manager: BLEManager, didReceiveMeshNodeBridgeStatus status: MeshNodeBridgeStatus, fromNodeWithPublicKey nodePublicKey: Data) {
+        Task { @MainActor in
+            if let index = nearbyPeers.firstIndex(where: { $0.publicKey == nodePublicKey }) {
+                nearbyPeers[index].relayReachable = status.isOnline
+                nearbyPeers[index].bridgeEnabled = status.bridge != "no_wifi"
+            }
         }
     }
 

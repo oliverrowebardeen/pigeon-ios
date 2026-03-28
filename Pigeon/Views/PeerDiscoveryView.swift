@@ -5,13 +5,14 @@ struct PeerDiscoveryView: View {
     @State private var navigationPath = NavigationPath()
     @State private var pendingWarningPeer: Peer?
     @State private var pendingWarning: PeerKeyChangeWarning?
+    @State private var selectedMeshNode: Peer?
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ZStack {
                 PigeonTheme.background.ignoresSafeArea()
 
-                if coordinator.nearbyContacts.isEmpty {
+                if coordinator.nearbyContacts.isEmpty && coordinator.connectedMeshNodeCount == 0 {
                     scanningState
                 } else {
                     peerList
@@ -44,6 +45,9 @@ struct PeerDiscoveryView: View {
                     "\(warning.displayName) was previously trusted as \(warning.previousPigeonID), but is now advertising \(warning.currentPigeonID). Messaging is paused until you confirm this key change."
                 )
             }
+            .sheet(item: $selectedMeshNode) { node in
+                MeshNodeDetailSheet(node: node)
+            }
         }
     }
 
@@ -63,22 +67,27 @@ struct PeerDiscoveryView: View {
         }
     }
 
+    private var meshNodes: [Peer] {
+        coordinator.nearbyPeers.filter(\.isMeshNode)
+    }
+
     private var peerList: some View {
         List {
-            if coordinator.connectedMeshNodeCount > 0 {
+            if !meshNodes.isEmpty {
                 Section {
-                    HStack(spacing: 8) {
-                        Image(systemName: "point.3.connected.trianglepath.dotted")
-                            .foregroundColor(PigeonTheme.accent)
-                        Text("Connected to \(coordinator.connectedMeshNodeCount) mesh \(coordinator.connectedMeshNodeCount == 1 ? "node" : "nodes")")
-                            .font(PigeonTheme.captionFont)
-                            .foregroundColor(PigeonTheme.textSecondary)
-                        Spacer()
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 8, height: 8)
+                    ForEach(meshNodes) { node in
+                        MeshNodeRowView(node: node) {
+                            selectedMeshNode = node
+                        }
+                        .listRowBackground(PigeonTheme.surface)
                     }
-                    .listRowBackground(PigeonTheme.surface)
+                } header: {
+                    HStack {
+                        Text("Mesh Nodes")
+                        Spacer()
+                        Text("\(meshNodes.count)")
+                            .foregroundColor(PigeonTheme.accent)
+                    }
                 }
             }
 
@@ -127,5 +136,199 @@ struct PeerDiscoveryView: View {
                 }
             }
         )
+    }
+}
+
+// MARK: - Mesh Node Row
+
+struct MeshNodeRowView: View {
+    let node: Peer
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(PigeonTheme.accent.opacity(0.15))
+                    .frame(width: 40, height: 40)
+                    .overlay {
+                        Image(systemName: "point.3.connected.trianglepath.dotted")
+                            .foregroundColor(PigeonTheme.accent)
+                    }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(node.displayName ?? "Mesh Node")
+                        .font(PigeonTheme.headlineFont)
+                        .foregroundColor(PigeonTheme.textPrimary)
+
+                    HStack(spacing: 6) {
+                        Text(node.pigeonID)
+                            .font(PigeonTheme.monoFont)
+                            .foregroundColor(PigeonTheme.textTertiary)
+
+                        bridgeIndicator
+                    }
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(PigeonTheme.textTertiary)
+            }
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var bridgeIndicator: some View {
+        if node.relayReachable {
+            Label("Bridge", systemImage: "globe")
+                .font(PigeonTheme.captionFont)
+                .foregroundColor(.green)
+        } else if node.bridgeEnabled {
+            Label("Bridge", systemImage: "globe")
+                .font(PigeonTheme.captionFont)
+                .foregroundColor(PigeonTheme.textTertiary)
+        }
+    }
+}
+
+// MARK: - Mesh Node Detail Sheet
+
+struct MeshNodeDetailSheet: View {
+    @Environment(AppCoordinator.self) private var coordinator
+    @Environment(\.dismiss) private var dismiss
+
+    let node: Peer
+
+    @State private var ssid = ""
+    @State private var password = ""
+    @State private var showingWiFiForm = false
+    @State private var showingDisconnectConfirm = false
+
+    private var liveNode: Peer {
+        coordinator.nearbyPeers.first(where: { $0.publicKey == node.publicKey }) ?? node
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                nodeInfoSection
+                bridgeStatusSection
+                wifiActionSection
+            }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(PigeonTheme.background)
+            .navigationTitle(liveNode.displayName ?? "Mesh Node")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .alert("Configure WiFi", isPresented: $showingWiFiForm) {
+                TextField("Network name (SSID)", text: $ssid)
+                    .textContentType(.none)
+                    .autocorrectionDisabled()
+                SecureField("Password", text: $password)
+                    .textContentType(.password)
+                Button("Cancel", role: .cancel) {
+                    ssid = ""
+                    password = ""
+                }
+                Button("Connect") {
+                    guard !ssid.isEmpty else { return }
+                    coordinator.sendWiFiCredentials(ssid: ssid, password: password, toMeshNode: liveNode)
+                    ssid = ""
+                    password = ""
+                }
+            } message: {
+                Text("Enter WiFi credentials for this mesh node. Credentials are sent over BLE and stored on the node.")
+            }
+            .alert("Disconnect WiFi", isPresented: $showingDisconnectConfirm) {
+                Button("Cancel", role: .cancel) {}
+                Button("Disconnect", role: .destructive) {
+                    coordinator.clearWiFiCredentials(forMeshNode: liveNode)
+                }
+            } message: {
+                Text("This will disconnect the mesh node from WiFi and clear its stored credentials.")
+            }
+        }
+    }
+
+    private var nodeInfoSection: some View {
+        Section("Node Info") {
+            LabeledContent("Pigeon ID") {
+                Text(liveNode.pigeonID)
+                    .font(PigeonTheme.monoFont)
+            }
+            if let rssi = liveNode.rssi {
+                LabeledContent("Signal") {
+                    Text("\(rssi) dBm")
+                        .font(PigeonTheme.monoFont)
+                }
+            }
+        }
+        .listRowBackground(PigeonTheme.surface)
+    }
+
+    private var bridgeStatusSection: some View {
+        Section("WiFi Bridge") {
+            HStack {
+                Label {
+                    Text("Status")
+                } icon: {
+                    Image(systemName: bridgeStatusIcon)
+                        .foregroundColor(bridgeStatusColor)
+                }
+
+                Spacer()
+
+                Text(bridgeStatusText)
+                    .foregroundColor(bridgeStatusColor)
+            }
+        }
+        .listRowBackground(PigeonTheme.surface)
+    }
+
+    private var wifiActionSection: some View {
+        Section {
+            Button {
+                showingWiFiForm = true
+            } label: {
+                Label("Configure WiFi", systemImage: "wifi")
+            }
+
+            if liveNode.bridgeEnabled {
+                Button(role: .destructive) {
+                    showingDisconnectConfirm = true
+                } label: {
+                    Label("Disconnect WiFi", systemImage: "wifi.slash")
+                }
+            }
+        }
+        .listRowBackground(PigeonTheme.surface)
+    }
+
+    private var bridgeStatusIcon: String {
+        if liveNode.relayReachable { return "globe" }
+        if liveNode.bridgeEnabled { return "wifi" }
+        return "wifi.slash"
+    }
+
+    private var bridgeStatusColor: Color {
+        if liveNode.relayReachable { return .green }
+        if liveNode.bridgeEnabled { return .orange }
+        return PigeonTheme.textTertiary
+    }
+
+    private var bridgeStatusText: String {
+        if liveNode.relayReachable { return "Online" }
+        if liveNode.bridgeEnabled { return "Connecting" }
+        return "Not Configured"
     }
 }
