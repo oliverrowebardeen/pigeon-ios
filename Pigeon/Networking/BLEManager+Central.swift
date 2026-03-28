@@ -261,18 +261,19 @@ extension BLEManager: CBPeripheralDelegate {
             peerPeripheralMap[payload.publicKey] = peripheralID
 
             let now = Date()
+            let existingPeer = nearbyPeers[payload.publicKey]
             let peer = Peer(
                 publicKey: payload.publicKey,
                 displayName: payload.displayName,
                 rssi: nil,
-                firstSeen: nearbyPeers[payload.publicKey]?.firstSeen ?? now,
+                firstSeen: existingPeer?.firstSeen ?? now,
                 lastSeen: now,
-                isSaved: nearbyPeers[payload.publicKey]?.isSaved ?? false,
+                isSaved: existingPeer?.isSaved ?? false,
                 bridgeProtocolVersion: payload.bridgeProtocolVersion,
-                bridgeEnabled: payload.bridgeEnabled ?? false,
+                bridgeEnabled: existingPeer?.bridgeEnabled ?? payload.bridgeEnabled ?? false,
                 isMeshNode: payload.isMeshNode ?? false,
-                relayReachable: payload.relayReachable ?? false,
-                bridgeCapacityRemaining: payload.bridgeCapacityRemaining
+                relayReachable: existingPeer?.relayReachable ?? payload.relayReachable ?? false,
+                bridgeCapacityRemaining: existingPeer?.bridgeCapacityRemaining ?? payload.bridgeCapacityRemaining
             )
 
             let isNew = nearbyPeers[payload.publicKey] == nil

@@ -24,7 +24,9 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             composerArea
         }
-        .background(PigeonTheme.background)
+        .background {
+            PigeonTheme.background.ignoresSafeArea(.all)
+        }
         .navigationTitle(conversation.displayTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarColorScheme(.dark, for: .navigationBar)
@@ -222,7 +224,6 @@ struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(PigeonTheme.surface)
-        .animation(.easeOut(duration: 0.15), value: isComposerFocused)
     }
 
     private var canSend: Bool {
