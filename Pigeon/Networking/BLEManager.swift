@@ -12,7 +12,7 @@ protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didFailMessage messageID: UUID)
     func bleManager(_ manager: BLEManager, didReceiveReachability payload: PeerReachabilityPayload)
     func bleManager(_ manager: BLEManager, didRelayEnvelope envelope: MessageEnvelope)
-    func bleManager(_ manager: BLEManager, didReceiveMeshPeers pigeonIDs: [String], fromNodeWithPublicKey nodePublicKey: Data)
+    func bleManager(_ manager: BLEManager, didReceiveMeshPeers peers: [(pigeonID: String, publicKey: Data)], fromNodeWithPublicKey nodePublicKey: Data)
     func bleManager(_ manager: BLEManager, didReceiveMeshNodeBridgeStatus status: MeshNodeBridgeStatus, fromNodeWithPublicKey nodePublicKey: Data)
     func bleManagerDidUpdateState(_ manager: BLEManager)
 }
@@ -68,6 +68,7 @@ final class BLEManager: NSObject {
     var peripheralACKChars: [UUID: CBCharacteristic] = [:]
     var peripheralBridgeControlChars: [UUID: CBCharacteristic] = [:]
     var peripheralReachabilityChars: [UUID: CBCharacteristic] = [:]
+    var peripheralIdentityChars: [UUID: CBCharacteristic] = [:]
     let reconnectDelaySeconds: TimeInterval = 1.0
     let reconnectAttemptIntervalSeconds: TimeInterval = 2.0
     var lastConnectAttemptAt: [UUID: Date] = [:]
@@ -98,6 +99,9 @@ final class BLEManager: NSObject {
     var bridgeCapacityRemaining: Int?
     var bridgePeerCentrals: [Data: CBCentral] = [:]
     var subscribedBridgeCentrals: [UUID: CBCentral] = [:]
+    var subscribedMessageCentrals: [UUID: CBCentral] = [:]
+    var pendingMeshRegistrations: Set<UUID> = []
+    var meshNodeDeviceIDs: Set<UUID> = []
 
     // MARK: - Lifecycle
 
@@ -165,6 +169,10 @@ final class BLEManager: NSObject {
         peripheralACKChars.removeAll()
         peripheralBridgeControlChars.removeAll()
         peripheralReachabilityChars.removeAll()
+        peripheralIdentityChars.removeAll()
+        pendingMeshRegistrations.removeAll()
+        subscribedMessageCentrals.removeAll()
+        meshNodeDeviceIDs.removeAll()
         lastConnectAttemptAt.removeAll()
         reassemblyBuffers.removeAll()
         bridgeReassemblyBuffers.removeAll()
@@ -317,6 +325,15 @@ final class BLEManager: NSObject {
             guard let data = try? JSONSerialization.data(withJSONObject: command) else { return }
             peripheral.writeValue(data, for: bridgeChar, type: .withResponse)
             print("[Pigeon] Sent WiFi disconnect to mesh node \(peripheralID)")
+        }
+    }
+
+    func refreshPeerIdentity(peripheralID: UUID) {
+        bleQueue.async { [weak self] in
+            guard let self,
+                  let peripheral = connectedPeripherals[peripheralID],
+                  let identityChar = peripheralIdentityChars[peripheralID] else { return }
+            peripheral.readValue(for: identityChar)
         }
     }
 
@@ -605,10 +622,34 @@ final class BLEManager: NSObject {
     }
 
     private func broadcastEnvelopeToSubscribers(_ envelope: MessageEnvelope) {
+        // Separate mesh node centrals (need routing header) from regular centrals
+        var meshCentrals: [CBCentral] = []
+        var regularCentrals: [CBCentral] = []
+
+        for (centralID, central) in subscribedMessageCentrals {
+            if meshNodeDeviceIDs.contains(centralID) {
+                meshCentrals.append(central)
+            } else {
+                regularCentrals.append(central)
+            }
+        }
+
         do {
-            let chunks = try MessageProtocol.chunkEnvelope(envelope)
-            for chunk in chunks {
-                peripheralManager.updateValue(chunk, for: messageCharacteristic, onSubscribedCentrals: nil)
+            if !regularCentrals.isEmpty {
+                let chunks = try MessageProtocol.chunkEnvelope(envelope)
+                for chunk in chunks {
+                    peripheralManager.updateValue(chunk, for: messageCharacteristic, onSubscribedCentrals: regularCentrals)
+                }
+            }
+
+            if !meshCentrals.isEmpty {
+                let chunks = try MessageProtocol.chunkEnvelopeWithRoutingHeader(
+                    envelope,
+                    recipientPublicKey: envelope.recipientPublicKey
+                )
+                for chunk in chunks {
+                    peripheralManager.updateValue(chunk, for: messageCharacteristic, onSubscribedCentrals: meshCentrals)
+                }
             }
         } catch {
             // Chunking failed
@@ -704,17 +745,29 @@ final class BLEManager: NSObject {
 
         switch type {
         case "peers":
-            guard let pigeonIDs = json["pigeonIDs"] as? [String] else {
-                print("[Pigeon] Malformed mesh node 'peers' message: missing pigeonIDs")
+            guard let peersArray = json["peers"] as? [[String: String]] else {
+                print("[Pigeon] Malformed mesh node 'peers' message: missing peers array")
                 return true
             }
             guard let peripheralID,
                   let nodePublicKey = peripheralPeerMap[peripheralID] else { return true }
 
-            print("[Pigeon] Mesh node \(peripheralID) reports peers: \(pigeonIDs)")
+            var parsedPeers: [(pigeonID: String, publicKey: Data)] = []
+            for peerObj in peersArray {
+                guard let pigeonID = peerObj["pigeonID"],
+                      let publicKeyBase64 = peerObj["publicKey"],
+                      let publicKeyData = Data(base64Encoded: publicKeyBase64),
+                      publicKeyData.count == 32,
+                      let _ = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: publicKeyData) else {
+                    continue
+                }
+                parsedPeers.append((pigeonID: pigeonID, publicKey: publicKeyData))
+            }
+
+            print("[Pigeon] Mesh node \(peripheralID) reports \(parsedPeers.count) peers")
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
-                delegate?.bleManager(self, didReceiveMeshPeers: pigeonIDs, fromNodeWithPublicKey: nodePublicKey)
+                delegate?.bleManager(self, didReceiveMeshPeers: parsedPeers, fromNodeWithPublicKey: nodePublicKey)
             }
 
         case "bridge_status":
@@ -759,14 +812,16 @@ final class BLEManager: NSObject {
                   let peripheral = connectedPeripherals[peripheralID],
                   let bridgeChar = peripheralBridgeControlChars[peripheralID] else { return }
 
+            let publicKeyBase64 = identity.publicKey.rawRepresentation.base64EncodedString()
             let message: [String: String] = [
                 "type": "register",
-                "pigeonID": identity.pigeonID
+                "pigeonID": identity.pigeonID,
+                "publicKey": publicKeyBase64
             ]
 
             guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
             peripheral.writeValue(data, for: bridgeChar, type: .withResponse)
-            print("[Pigeon] Registered pigeonID with mesh node \(peripheralID)")
+            print("[Pigeon] Registered with mesh node \(peripheralID) (pigeonID: \(identity.pigeonID), publicKey included)")
         }
     }
 

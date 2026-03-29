@@ -123,8 +123,13 @@ extension BLEManager: CBPeripheralManagerDelegate {
         central: CBCentral,
         didSubscribeTo characteristic: CBCharacteristic
     ) {
-        if characteristic.uuid == BLEConstants.bridgeControlCharUUID {
+        switch characteristic.uuid {
+        case BLEConstants.bridgeControlCharUUID:
             subscribedBridgeCentrals[central.identifier] = central
+        case BLEConstants.messageCharUUID:
+            subscribedMessageCentrals[central.identifier] = central
+        default:
+            break
         }
     }
 
@@ -133,9 +138,14 @@ extension BLEManager: CBPeripheralManagerDelegate {
         central: CBCentral,
         didUnsubscribeFrom characteristic: CBCharacteristic
     ) {
-        if characteristic.uuid == BLEConstants.bridgeControlCharUUID {
+        switch characteristic.uuid {
+        case BLEConstants.bridgeControlCharUUID:
             subscribedBridgeCentrals.removeValue(forKey: central.identifier)
             bridgePeerCentrals = bridgePeerCentrals.filter { $0.value.identifier != central.identifier }
+        case BLEConstants.messageCharUUID:
+            subscribedMessageCentrals.removeValue(forKey: central.identifier)
+        default:
+            break
         }
     }
 

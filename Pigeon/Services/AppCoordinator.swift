@@ -104,6 +104,8 @@ final class AppCoordinator {
 
     private var peerKeyChangeWarnings: [Data: PeerKeyChangeWarning] = [:]
     private var meshReachabilityCache: [Data: Bool] = [:]
+    private var meshNodeIntroducedPeers: [Data: Set<Data>] = [:]
+    private var wifiRefreshTask: Task<Void, Never>?
 
     init(store: PigeonStore) throws {
         let identity = try PigeonIdentity.loadOrCreate()
@@ -189,6 +191,18 @@ final class AppCoordinator {
     func sendWiFiCredentials(ssid: String, password: String, toMeshNode peer: Peer) {
         guard let peripheralID = bleManager.peripheralID(forPeerPublicKey: peer.publicKey) else { return }
         bleManager.sendWiFiCredentials(ssid: ssid, password: password, toMeshNode: peripheralID)
+        // Re-read identity after delay to pick up bridge state changes.
+        // Workaround: bridge_status BLE notifications may be lost due to
+        // ESP32 WiFi/BLE radio coexistence during the WiFi connection phase.
+        wifiRefreshTask?.cancel()
+        wifiRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled, self != nil else { return }
+            bleManager.refreshPeerIdentity(peripheralID: peripheralID)
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled, self != nil else { return }
+            bleManager.refreshPeerIdentity(peripheralID: peripheralID)
+        }
     }
 
     func clearWiFiCredentials(forMeshNode peer: Peer) {
@@ -2034,6 +2048,7 @@ final class AppCoordinator {
             }
 
             try keyStore.saveKnownPeerPublicKey(peer.publicKey, pigeonID: trustAlias)
+            try keyStore.savePeerKeyByPigeonID(peer.publicKey, pigeonID: peer.pigeonID)
             peerKeyChangeWarnings.removeValue(forKey: peer.publicKey)
         } catch {
             let warning = PeerKeyChangeWarning(
@@ -2065,7 +2080,7 @@ final class AppCoordinator {
         guard let relayClient else { return }
 
         let candidates = nearbyPeers
-            .filter { $0.publicKey != identity.publicKey.rawRepresentation && !$0.isMeshNode }
+            .filter { $0.publicKey != identity.publicKey.rawRepresentation && !$0.isMeshNode && !$0.meshDiscovered }
             .map { peer in
                 BridgeCandidate(
                     publicKey: peer.publicKey,
@@ -2337,6 +2352,16 @@ extension AppCoordinator: BLEManagerDelegate {
         Task { @MainActor in
             nearbyPeers.removeAll(where: { $0.publicKey == publicKey })
             await meshTopology.removeNode(publicKey)
+
+            // If the lost peer is a mesh node, remove peers it introduced
+            // (unless they're also introduced by another still-connected mesh node)
+            if let introducedPeers = meshNodeIntroducedPeers.removeValue(forKey: publicKey) {
+                let stillReachable = meshNodeIntroducedPeers.values.reduce(into: Set<Data>()) { $0.formUnion($1) }
+                for peerKey in introducedPeers where !stillReachable.contains(peerKey) {
+                    nearbyPeers.removeAll(where: { $0.publicKey == peerKey })
+                }
+            }
+
             await refreshMeshReachabilityCache()
             refreshBridgeCandidates()
             await relayClient?.handleBridgePeerLoss(publicKey)
@@ -2396,23 +2421,73 @@ extension AppCoordinator: BLEManagerDelegate {
         }
     }
 
-    nonisolated func bleManager(_ manager: BLEManager, didReceiveMeshPeers pigeonIDs: [String], fromNodeWithPublicKey nodePublicKey: Data) {
+    nonisolated func bleManager(_ manager: BLEManager, didReceiveMeshPeers peers: [(pigeonID: String, publicKey: Data)], fromNodeWithPublicKey nodePublicKey: Data) {
         Task { @MainActor in
-            var resolvedKeys: [Data] = []
-            for pigeonID in pigeonIDs {
-                guard pigeonID != identity.pigeonID else { continue }
-                if let publicKey = try? keyStore.loadKnownPeerPublicKey(pigeonID: pigeonID) {
-                    resolvedKeys.append(publicKey)
+            var reachableKeys: [Data] = []
+            var introducedKeys: Set<Data> = []
+
+            for meshPeer in peers {
+                // Verify pigeonID matches publicKey to prevent poisoning
+                let expectedPigeonID = PigeonIdentity.makePigeonID(fromPublicKeyData: meshPeer.publicKey)
+                guard meshPeer.pigeonID == expectedPigeonID else { continue }
+
+                // Skip ourselves
+                guard meshPeer.pigeonID != identity.pigeonID else { continue }
+
+                // TOFU: reject if we already have a different key for this pigeonID
+                if let existingKey = try? keyStore.loadPeerKeyByPigeonID(pigeonID: meshPeer.pigeonID),
+                   existingKey != meshPeer.publicKey {
+                    print("[Pigeon] Mesh peer \(meshPeer.pigeonID) presented different public key — ignoring (possible impersonation)")
+                    continue
+                }
+
+                reachableKeys.append(meshPeer.publicKey)
+                introducedKeys.insert(meshPeer.publicKey)
+
+                // Save the public key indexed by pigeonID for future lookups
+                do {
+                    try keyStore.savePeerKeyByPigeonID(meshPeer.publicKey, pigeonID: meshPeer.pigeonID)
+                } catch {
+                    print("[Pigeon] Failed to save mesh peer key for \(meshPeer.pigeonID): \(error)")
+                }
+
+                // Create or refresh Peer entry
+                if let idx = nearbyPeers.firstIndex(where: { $0.publicKey == meshPeer.publicKey }) {
+                    nearbyPeers[idx].lastSeen = Date()
+                } else {
+                    let now = Date()
+                    let peer = Peer(
+                        publicKey: meshPeer.publicKey,
+                        displayName: meshPeer.pigeonID,
+                        rssi: nil,
+                        firstSeen: now,
+                        lastSeen: now,
+                        isSaved: false,
+                        meshDiscovered: true
+                    )
+                    nearbyPeers.append(peer)
                 }
             }
 
-            guard !resolvedKeys.isEmpty else { return }
+            // Remove peers this node previously introduced but no longer reports
+            let oldIntroduced = meshNodeIntroducedPeers[nodePublicKey] ?? []
+            let droppedPeers = oldIntroduced.subtracting(introducedKeys)
+            let otherReachable = meshNodeIntroducedPeers
+                .filter { $0.key != nodePublicKey }
+                .values.reduce(into: Set<Data>()) { $0.formUnion($1) }
+            for peerKey in droppedPeers where !otherReachable.contains(peerKey) {
+                nearbyPeers.removeAll(where: { $0.publicKey == peerKey })
+            }
+            meshNodeIntroducedPeers[nodePublicKey] = introducedKeys
 
-            // The mesh node can reach these peers via LoRa
+            guard !reachableKeys.isEmpty else { return }
+
+            // Update mesh topology — check if this node is a WiFi bridge gateway
+            let nodeIsGateway = nearbyPeers.first(where: { $0.publicKey == nodePublicKey })?.relayReachable ?? false
             await meshTopology.update(
                 sender: nodePublicKey,
-                reachablePeers: resolvedKeys,
-                hasInternetGateway: false,
+                reachablePeers: reachableKeys,
+                hasInternetGateway: nodeIsGateway,
                 timestamp: Date()
             )
             await meshTopology.pruneStale()

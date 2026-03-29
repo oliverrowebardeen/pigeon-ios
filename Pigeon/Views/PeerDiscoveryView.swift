@@ -221,7 +221,9 @@ struct MeshNodeDetailSheet: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(PigeonTheme.background)
+            .background {
+                PigeonTheme.background.ignoresSafeArea(.all)
+            }
             .navigationTitle(liveNode.displayName ?? "Mesh Node")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)

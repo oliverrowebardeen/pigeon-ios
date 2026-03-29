@@ -20,6 +20,9 @@ extension BLEManager: CBCentralManagerDelegate {
             peripheralACKChars.removeAll()
             peripheralBridgeControlChars.removeAll()
             peripheralReachabilityChars.removeAll()
+            peripheralIdentityChars.removeAll()
+            pendingMeshRegistrations.removeAll()
+            meshNodeDeviceIDs.removeAll()
             lastConnectAttemptAt.removeAll()
             nearbyPeers.removeAll()
         default:
@@ -110,6 +113,9 @@ extension BLEManager: CBCentralManagerDelegate {
         peripheralACKChars.removeValue(forKey: peripheralID)
         peripheralBridgeControlChars.removeValue(forKey: peripheralID)
         peripheralReachabilityChars.removeValue(forKey: peripheralID)
+        peripheralIdentityChars.removeValue(forKey: peripheralID)
+        pendingMeshRegistrations.remove(peripheralID)
+        meshNodeDeviceIDs.remove(peripheralID)
 
         // Broadcast updated reachability (our peer list changed)
         broadcastOwnReachability()
@@ -178,6 +184,7 @@ extension BLEManager: CBPeripheralDelegate {
         for characteristic in characteristics {
             switch characteristic.uuid {
             case BLEConstants.identityCharUUID:
+                peripheralIdentityChars[peripheralID] = characteristic
                 peripheral.readValue(for: characteristic)
 
             case BLEConstants.messageCharUUID:
@@ -244,7 +251,12 @@ extension BLEManager: CBPeripheralDelegate {
         didUpdateNotificationStateFor characteristic: CBCharacteristic,
         error: Error?
     ) {
-        // Notification subscription updated
+        // Complete pending mesh node registration once bridge control notifications are active
+        if characteristic.uuid == BLEConstants.bridgeControlCharUUID,
+           error == nil,
+           pendingMeshRegistrations.remove(peripheral.identifier) != nil {
+            registerWithMeshNode(peripheralID: peripheral.identifier)
+        }
     }
 
     // MARK: - Identity handling
@@ -270,9 +282,9 @@ extension BLEManager: CBPeripheralDelegate {
                 lastSeen: now,
                 isSaved: existingPeer?.isSaved ?? false,
                 bridgeProtocolVersion: payload.bridgeProtocolVersion,
-                bridgeEnabled: existingPeer?.bridgeEnabled ?? payload.bridgeEnabled ?? false,
+                bridgeEnabled: (existingPeer?.bridgeEnabled ?? false) || (payload.bridgeEnabled ?? false),
                 isMeshNode: payload.isMeshNode ?? false,
-                relayReachable: existingPeer?.relayReachable ?? payload.relayReachable ?? false,
+                relayReachable: (existingPeer?.relayReachable ?? false) || (payload.relayReachable ?? false),
                 bridgeCapacityRemaining: existingPeer?.bridgeCapacityRemaining ?? payload.bridgeCapacityRemaining
             )
 
@@ -292,8 +304,14 @@ extension BLEManager: CBPeripheralDelegate {
             sendPendingMessages(toPeerWithPublicKey: payload.publicKey, peripheralID: peripheralID)
 
             // Register with mesh nodes so they broadcast our pigeonID over LoRa
+            // Wait for bridge control notification subscription to be confirmed first
             if peer.isMeshNode {
-                registerWithMeshNode(peripheralID: peripheralID)
+                meshNodeDeviceIDs.insert(peripheralID)
+                if let bridgeChar = peripheralBridgeControlChars[peripheralID], bridgeChar.isNotifying {
+                    registerWithMeshNode(peripheralID: peripheralID)
+                } else {
+                    pendingMeshRegistrations.insert(peripheralID)
+                }
             }
 
             // Broadcast updated reachability (our peer list changed)

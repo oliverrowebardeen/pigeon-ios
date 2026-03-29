@@ -39,6 +39,16 @@ nonisolated final class KeyStore: Sendable {
         try loadData(account: Account.peerPrefix + pigeonID)
     }
 
+    // MARK: - PigeonID-indexed peer keys (for mesh discovery)
+
+    func savePeerKeyByPigeonID(_ publicKeyData: Data, pigeonID: String) throws {
+        try save(data: publicKeyData, account: Account.peerPrefix + "pid." + pigeonID)
+    }
+
+    func loadPeerKeyByPigeonID(pigeonID: String) throws -> Data? {
+        try loadData(account: Account.peerPrefix + "pid." + pigeonID)
+    }
+
     func loadKnownPeerPublicKeys() throws -> [String: Data] {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -75,6 +85,8 @@ nonisolated final class KeyStore: Sendable {
             }
 
             let pigeonID = String(account.dropFirst(Account.peerPrefix.count))
+            // Skip pigeonID-indexed entries (mesh discovery uses "pid." prefix)
+            if pigeonID.hasPrefix("pid.") { continue }
             peers[pigeonID] = data
         }
 
