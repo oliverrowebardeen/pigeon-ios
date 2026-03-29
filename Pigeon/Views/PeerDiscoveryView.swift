@@ -184,13 +184,26 @@ struct MeshNodeRowView: View {
     @ViewBuilder
     private var bridgeIndicator: some View {
         if node.relayReachable {
-            Label("Bridge", systemImage: "globe")
-                .font(PigeonTheme.captionFont)
-                .foregroundColor(.green)
+            HStack(spacing: 2) {
+                Image(systemName: "globe")
+                Text("Bridge")
+            }
+            .font(PigeonTheme.captionFont)
+            .foregroundColor(.green)
+        } else if node.bridgeState == "offline" {
+            HStack(spacing: 2) {
+                Image(systemName: "wifi")
+                Text("WiFi")
+            }
+            .font(PigeonTheme.captionFont)
+            .foregroundColor(.yellow)
         } else if node.bridgeEnabled {
-            Label("Bridge", systemImage: "globe")
-                .font(PigeonTheme.captionFont)
-                .foregroundColor(PigeonTheme.textTertiary)
+            HStack(spacing: 2) {
+                Image(systemName: "wifi")
+                Text("Bridge")
+            }
+            .font(PigeonTheme.captionFont)
+            .foregroundColor(.orange)
         }
     }
 }
@@ -318,19 +331,30 @@ struct MeshNodeDetailSheet: View {
 
     private var bridgeStatusIcon: String {
         if liveNode.relayReachable { return "globe" }
+        if liveNode.bridgeState == "offline" { return "wifi.exclamationmark" }
         if liveNode.bridgeEnabled { return "wifi" }
         return "wifi.slash"
     }
 
     private var bridgeStatusColor: Color {
         if liveNode.relayReachable { return .green }
+        if liveNode.bridgeState == "offline" { return .yellow }
         if liveNode.bridgeEnabled { return .orange }
         return PigeonTheme.textTertiary
     }
 
     private var bridgeStatusText: String {
-        if liveNode.relayReachable { return "Online" }
-        if liveNode.bridgeEnabled { return "Connecting" }
-        return "Not Configured"
+        switch liveNode.bridgeState {
+        case "online": return "Online"
+        case "connecting": return "Connecting to WiFi..."
+        case "auth": return "Authenticating..."
+        case "offline": return "WiFi Connected"
+        case "no_wifi": return "Not Configured"
+        default:
+            // No bridge_status received yet — fall back to identity flags
+            if liveNode.relayReachable { return "Online" }
+            if liveNode.bridgeEnabled { return "Configured" }
+            return "Not Configured"
+        }
     }
 }

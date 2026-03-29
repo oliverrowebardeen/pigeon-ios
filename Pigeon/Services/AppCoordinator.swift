@@ -2500,6 +2500,7 @@ extension AppCoordinator: BLEManagerDelegate {
             if let index = nearbyPeers.firstIndex(where: { $0.publicKey == nodePublicKey }) {
                 nearbyPeers[index].relayReachable = status.isOnline
                 nearbyPeers[index].bridgeEnabled = status.bridge != "no_wifi"
+                nearbyPeers[index].bridgeState = status.bridge
             }
         }
     }

@@ -734,8 +734,17 @@ final class BLEManager: NSObject {
     /// Handles plain JSON messages from ESP32 mesh nodes on bridge control.
     /// Returns true if the data was a mesh node message, false to fall through to chunked processing.
     private func handleMeshNodeMessage(_ data: Data, source: BridgePacketSource) -> Bool {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = json["type"] as? String else {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+
+        // Firmware bridge_status notifications omit "type" — infer from "bridge" key
+        let type: String
+        if let explicit = json["type"] as? String {
+            type = explicit
+        } else if json["bridge"] is String {
+            type = "bridge_status"
+        } else {
             return false
         }
 
@@ -789,6 +798,7 @@ final class BLEManager: NSObject {
             if var peer = nearbyPeers[nodePublicKey] {
                 peer.relayReachable = status.isOnline
                 peer.bridgeEnabled = status.bridge != "no_wifi"
+                peer.bridgeState = status.bridge
                 nearbyPeers[nodePublicKey] = peer
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
@@ -1014,7 +1024,7 @@ final class BLEManager: NSObject {
 }
 
 nonisolated struct MeshNodeBridgeStatus: Sendable {
-    let bridge: String    // "online", "no_wifi", "connecting"
+    let bridge: String    // "online", "connecting", "auth", "offline", "no_wifi"
     let ssid: String?
     let ip: String?
 
