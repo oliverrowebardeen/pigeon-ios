@@ -34,15 +34,7 @@ final class PigeonStore {
         let storeURL = storeDir.appendingPathComponent("pigeon.store")
         let config = ModelConfiguration(url: storeURL)
 
-        do {
-            modelContainer = try ModelContainer(for: Self.schema, configurations: [config])
-        } catch {
-            // Schema updates can make old local stores unreadable; wipe and recreate once.
-            try? fm.removeItem(at: storeURL)
-            try? fm.removeItem(at: URL(fileURLWithPath: storeURL.path + "-shm"))
-            try? fm.removeItem(at: URL(fileURLWithPath: storeURL.path + "-wal"))
-            modelContainer = try ModelContainer(for: Self.schema, configurations: [config])
-        }
+        modelContainer = try ModelContainer(for: Self.schema, configurations: [config])
     }
 
     // MARK: - Messages

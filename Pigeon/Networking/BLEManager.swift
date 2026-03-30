@@ -115,6 +115,12 @@ final class BLEManager: NSObject {
         super.init()
     }
 
+    func debugLog(_ message: @autoclosure () -> String) {
+#if DEBUG
+        print(message())
+#endif
+    }
+
     enum BridgePacketSource {
         case peripheral(UUID)
         case central(CBCentral)
@@ -308,7 +314,7 @@ final class BLEManager: NSObject {
             let command: [String: String] = ["ssid": ssid, "pass": password]
             guard let data = try? JSONSerialization.data(withJSONObject: command) else { return }
             peripheral.writeValue(data, for: bridgeChar, type: .withResponse)
-            print("[Pigeon] Sent WiFi credentials to mesh node \(peripheralID)")
+            debugLog("[Pigeon] Sent WiFi credentials to mesh node \(peripheralID)")
         }
     }
 
@@ -325,7 +331,7 @@ final class BLEManager: NSObject {
             let command: [String: String] = ["wifi": "off"]
             guard let data = try? JSONSerialization.data(withJSONObject: command) else { return }
             peripheral.writeValue(data, for: bridgeChar, type: .withResponse)
-            print("[Pigeon] Sent WiFi disconnect to mesh node \(peripheralID)")
+            debugLog("[Pigeon] Sent WiFi disconnect to mesh node \(peripheralID)")
         }
     }
 
@@ -848,7 +854,7 @@ final class BLEManager: NSObject {
         switch type {
         case "peers":
             guard let peersArray = json["peers"] as? [[String: String]] else {
-                print("[Pigeon] Malformed mesh node 'peers' message: missing peers array")
+                debugLog("[Pigeon] Malformed mesh node 'peers' message: missing peers array")
                 return true
             }
             guard let peripheralID,
@@ -866,7 +872,7 @@ final class BLEManager: NSObject {
                 parsedPeers.append((pigeonID: pigeonID, publicKey: publicKeyData))
             }
 
-            print("[Pigeon] Mesh node \(peripheralID) reports \(parsedPeers.count) peers")
+            debugLog("[Pigeon] Mesh node \(peripheralID) reports \(parsedPeers.count) peers")
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 delegate?.bleManager(self, didReceiveMeshPeers: parsedPeers, fromNodeWithPublicKey: nodePublicKey)
@@ -874,7 +880,7 @@ final class BLEManager: NSObject {
 
         case "bridge_status":
             guard let bridge = json["bridge"] as? String else {
-                print("[Pigeon] Malformed mesh node 'bridge_status': missing bridge field")
+                debugLog("[Pigeon] Malformed mesh node 'bridge_status': missing bridge field")
                 return true
             }
             guard let peripheralID,
@@ -885,7 +891,7 @@ final class BLEManager: NSObject {
                 ssid: json["ssid"] as? String,
                 ip: json["ip"] as? String
             )
-            print("[Pigeon] Mesh node \(peripheralID) bridge status: \(bridge)")
+            debugLog("[Pigeon] Mesh node \(peripheralID) bridge status: \(bridge)")
 
             // Update the peer's bridge state
             if var peer = nearbyPeers[nodePublicKey] {
@@ -901,7 +907,7 @@ final class BLEManager: NSObject {
             }
 
         default:
-            print("[Pigeon] Unknown mesh node message type: \(type)")
+            debugLog("[Pigeon] Unknown mesh node message type: \(type)")
         }
 
         return true
@@ -924,7 +930,7 @@ final class BLEManager: NSObject {
 
             guard let data = try? JSONSerialization.data(withJSONObject: message) else { return }
             peripheral.writeValue(data, for: bridgeChar, type: .withResponse)
-            print("[Pigeon] Registered with mesh node \(peripheralID) (pigeonID: \(identity.pigeonID), publicKey included)")
+            debugLog("[Pigeon] Registered with mesh node \(peripheralID)")
         }
     }
 

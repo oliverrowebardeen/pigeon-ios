@@ -84,6 +84,9 @@ final class AppCoordinator {
     var meshtasticNodes: [MeshtasticNode] = []
     var activeNodeConnection: NodeConnectionType?
     var nearbyContacts: [Peer] { nearbyPeers.filter { !$0.isMeshNode } }
+    private var directlyConnectedPeers: [Peer] { nearbyPeers.filter { !$0.meshDiscovered } }
+    private var directlyConnectedPeerKeys: [Data] { directlyConnectedPeers.map(\.publicKey) }
+    private var hasDirectBLEPeers: Bool { !directlyConnectedPeers.isEmpty }
     var connectedMeshNodeCount: Int { nearbyPeers.filter(\.isMeshNode).count }
     var bleState: BLEManager.State = .idle
     var transportState: TransportState = .bleOnly
@@ -537,11 +540,11 @@ final class AppCoordinator {
     }
 
     func isPeerNearby(publicKey: Data) -> Bool {
-        nearbyPeers.contains(where: { $0.publicKey == publicKey })
+        directlyConnectedPeers.contains(where: { $0.publicKey == publicKey })
     }
 
     private func canAttemptBLEMeshDelivery(to recipientPublicKey: Data) -> Bool {
-        return isPeerNearby(publicKey: recipientPublicKey) || !nearbyPeers.isEmpty
+        isPeerNearby(publicKey: recipientPublicKey) || hasDirectBLEPeers
     }
 
     /// Whether a connected Pigeon mesh node is in Meshtastic LoRa mode.
@@ -566,7 +569,7 @@ final class AppCoordinator {
         if meshtasticBLEManager.state == .connected {
             return .meshtasticMesh
         }
-        if !nearbyPeers.isEmpty {
+        if hasDirectBLEPeers {
             return .pigeonMesh
         }
         return .none
@@ -583,7 +586,7 @@ final class AppCoordinator {
         if meshtasticBLEManager.state == .connected {
             return .meshtasticMesh
         }
-        if !nearbyPeers.isEmpty {
+        if hasDirectBLEPeers {
             return .pigeonMesh
         }
         return .none
@@ -769,6 +772,65 @@ final class AppCoordinator {
         return merged
     }
 
+    private func mergedDirectPeer(_ directPeer: Peer, with existingPeer: Peer?) -> Peer {
+        guard let existingPeer else { return directPeer }
+
+        var merged = directPeer
+        merged.displayName = existingPeer.displayName ?? directPeer.displayName
+        merged.rssi = directPeer.rssi ?? existingPeer.rssi
+        merged.firstSeen = min(existingPeer.firstSeen, directPeer.firstSeen)
+        merged.lastSeen = max(existingPeer.lastSeen, directPeer.lastSeen)
+        merged.isSaved = directPeer.isSaved || existingPeer.isSaved
+        merged.bridgeProtocolVersion = directPeer.bridgeProtocolVersion ?? existingPeer.bridgeProtocolVersion
+        merged.bridgeEnabled = directPeer.bridgeEnabled
+        merged.isMeshNode = directPeer.isMeshNode
+        merged.relayReachable = directPeer.relayReachable
+        merged.bridgeState = directPeer.bridgeState ?? existingPeer.bridgeState
+        merged.bridgeCapacityRemaining = directPeer.bridgeCapacityRemaining ?? existingPeer.bridgeCapacityRemaining
+        merged.meshDiscovered = false
+        return merged
+    }
+
+    private func upsertDirectNearbyPeer(_ peer: Peer) {
+        let mergedPeer = mergedDirectPeer(
+            peer,
+            with: nearbyPeers.first(where: { $0.publicKey == peer.publicKey })
+        )
+        if let index = nearbyPeers.firstIndex(where: { $0.publicKey == peer.publicKey }) {
+            nearbyPeers[index] = mergedPeer
+        } else {
+            nearbyPeers.append(mergedPeer)
+        }
+    }
+
+    private func isMeshPeerIntroduced(_ publicKey: Data) -> Bool {
+        meshNodeIntroducedPeers.values.contains { $0.contains(publicKey) }
+    }
+
+    private func maybeDemoteDirectPeerToMeshDiscovered(_ publicKey: Data) {
+        guard let index = nearbyPeers.firstIndex(where: { $0.publicKey == publicKey }),
+              !nearbyPeers[index].isMeshNode,
+              isMeshPeerIntroduced(publicKey)
+        else {
+            return
+        }
+
+        nearbyPeers[index].meshDiscovered = true
+        nearbyPeers[index].rssi = nil
+        nearbyPeers[index].bridgeProtocolVersion = nil
+        nearbyPeers[index].bridgeEnabled = false
+        nearbyPeers[index].relayReachable = false
+        nearbyPeers[index].bridgeState = nil
+        nearbyPeers[index].bridgeCapacityRemaining = nil
+        nearbyPeers[index].lastSeen = Date()
+    }
+
+    private func debugLog(_ message: @autoclosure () -> String) {
+#if DEBUG
+        print(message())
+#endif
+    }
+
     func directConversationReachability(for publicKey: Data?) -> DirectConversationReachability {
         guard let publicKey else { return .outOfRange }
 
@@ -790,7 +852,7 @@ final class AppCoordinator {
     }
 
     private func refreshMeshReachabilityCache() async {
-        let directPeerKeys = nearbyPeers.map(\.publicKey)
+        let directPeerKeys = directlyConnectedPeerKeys
         let contacts = contactPeers()
         var newCache: [Data: Bool] = [:]
         for contact in contacts {
@@ -1943,7 +2005,7 @@ final class AppCoordinator {
         }
 
         // Capture nearby status before entering TaskGroup (MainActor context)
-        let nearbyKeys = Set(nearbyPeers.map(\.publicKey))
+        let nearbyKeys = Set(directlyConnectedPeerKeys)
 
         // Send in parallel — each relay send is independent
         let results = await withTaskGroup(of: Bool.self) { group in
@@ -2094,7 +2156,7 @@ final class AppCoordinator {
         }
 
         // 3b. No internet but a gateway exists in the mesh — route toward it
-        let directPeerKeys = nearbyPeers.map(\.publicKey)
+        let directPeerKeys = directlyConnectedPeerKeys
         if let gatewayHop = await meshTopology.firstHopToGateway(from: directPeerKeys) {
             bleManager.sendMessage(envelope, to: gatewayHop)
             return false
@@ -2513,9 +2575,7 @@ extension AppCoordinator: BLEManagerDelegate {
     nonisolated func bleManager(_ manager: BLEManager, didDiscoverPeer peer: Peer) {
         Task { @MainActor in
             updateTrustState(for: peer)
-            if !nearbyPeers.contains(where: { $0.publicKey == peer.publicKey }) {
-                nearbyPeers.append(peer)
-            }
+            upsertDirectNearbyPeer(peer)
             refreshBridgeCandidates()
             scheduleQueuedOutboundRetry()
         }
@@ -2524,11 +2584,7 @@ extension AppCoordinator: BLEManagerDelegate {
     nonisolated func bleManager(_ manager: BLEManager, didUpdatePeer peer: Peer) {
         Task { @MainActor in
             updateTrustState(for: peer)
-            if let index = nearbyPeers.firstIndex(where: { $0.publicKey == peer.publicKey }) {
-                nearbyPeers[index] = peer
-            } else {
-                nearbyPeers.append(peer)
-            }
+            upsertDirectNearbyPeer(peer)
             refreshBridgeCandidates()
             scheduleQueuedOutboundRetry()
         }
@@ -2536,7 +2592,8 @@ extension AppCoordinator: BLEManagerDelegate {
 
     nonisolated func bleManager(_ manager: BLEManager, didLosePeer publicKey: Data) {
         Task { @MainActor in
-            nearbyPeers.removeAll(where: { $0.publicKey == publicKey })
+            maybeDemoteDirectPeerToMeshDiscovered(publicKey)
+            nearbyPeers.removeAll(where: { $0.publicKey == publicKey && !$0.meshDiscovered })
             await meshTopology.removeNode(publicKey)
 
             // If the lost peer is a mesh node, remove peers it introduced
@@ -2544,7 +2601,7 @@ extension AppCoordinator: BLEManagerDelegate {
             if let introducedPeers = meshNodeIntroducedPeers.removeValue(forKey: publicKey) {
                 let stillReachable = meshNodeIntroducedPeers.values.reduce(into: Set<Data>()) { $0.formUnion($1) }
                 for peerKey in introducedPeers where !stillReachable.contains(peerKey) {
-                    nearbyPeers.removeAll(where: { $0.publicKey == peerKey })
+                    nearbyPeers.removeAll(where: { $0.publicKey == peerKey && $0.meshDiscovered })
                 }
             }
 
@@ -2591,7 +2648,7 @@ extension AppCoordinator: BLEManagerDelegate {
             guard let relayClient, hasInternetConnectivity else { return }
 
             // Don't upload if the recipient is reachable via mesh — mesh-first
-            let directPeerKeys = nearbyPeers.map(\.publicKey)
+            let directPeerKeys = directlyConnectedPeerKeys
             let recipientMeshReachable = await meshTopology.isTransitivelyReachable(
                 target: envelope.recipientPublicKey,
                 from: directPeerKeys
@@ -2602,7 +2659,7 @@ extension AppCoordinator: BLEManagerDelegate {
             do {
                 try await relayClient.sendEnvelope(envelope)
             } catch {
-                print("[Pigeon] Gateway relay forwarding failed: \(error.localizedDescription)")
+                debugLog("[Pigeon] Gateway relay forwarding failed: \(error.localizedDescription)")
             }
         }
     }
@@ -2623,7 +2680,7 @@ extension AppCoordinator: BLEManagerDelegate {
                 // TOFU: reject if we already have a different key for this pigeonID
                 if let existingKey = try? keyStore.loadPeerKeyByPigeonID(pigeonID: meshPeer.pigeonID),
                    existingKey != meshPeer.publicKey {
-                    print("[Pigeon] Mesh peer \(meshPeer.pigeonID) presented different public key — ignoring (possible impersonation)")
+                    debugLog("[Pigeon] Mesh peer presented a different public key for \(meshPeer.pigeonID); ignoring")
                     continue
                 }
 
@@ -2634,7 +2691,7 @@ extension AppCoordinator: BLEManagerDelegate {
                 do {
                     try keyStore.savePeerKeyByPigeonID(meshPeer.publicKey, pigeonID: meshPeer.pigeonID)
                 } catch {
-                    print("[Pigeon] Failed to save mesh peer key for \(meshPeer.pigeonID): \(error)")
+                    debugLog("[Pigeon] Failed to save mesh peer key for \(meshPeer.pigeonID): \(error)")
                 }
 
                 // Create or refresh Peer entry
@@ -2662,7 +2719,7 @@ extension AppCoordinator: BLEManagerDelegate {
                 .filter { $0.key != nodePublicKey }
                 .values.reduce(into: Set<Data>()) { $0.formUnion($1) }
             for peerKey in droppedPeers where !otherReachable.contains(peerKey) {
-                nearbyPeers.removeAll(where: { $0.publicKey == peerKey })
+                nearbyPeers.removeAll(where: { $0.publicKey == peerKey && $0.meshDiscovered })
             }
             meshNodeIntroducedPeers[nodePublicKey] = introducedKeys
 
@@ -2702,7 +2759,7 @@ extension AppCoordinator: BLEManagerDelegate {
                 let payload = try Self.wireDecoder.decode(WirePayloadV2.self, from: plaintext)
                 try await applyIncomingPayload(payload, source: .ble)
             } catch {
-                print("[Pigeon] Failed to decode compact group envelope from BLE: \(error)")
+                debugLog("[Pigeon] Failed to decode compact group envelope from BLE: \(error)")
             }
         }
     }
@@ -2783,7 +2840,7 @@ extension AppCoordinator: MeshtasticBLEManagerDelegate {
             if let idx = meshtasticNodes.firstIndex(where: { $0.id == node.id }) {
                 meshtasticNodes[idx] = node
             }
-            print("[Meshtastic] Connected to node \(node.longName ?? "unknown") (#\(node.id))")
+            debugLog("[Meshtastic] Connected to node \(node.longName ?? "unknown") (#\(node.id))")
         }
     }
 
@@ -2795,7 +2852,7 @@ extension AppCoordinator: MeshtasticBLEManagerDelegate {
             if let idx = meshtasticNodes.firstIndex(where: { $0.id == node.id }) {
                 meshtasticNodes[idx] = node
             }
-            print("[Meshtastic] Disconnected from node \(node.longName ?? "unknown") (#\(node.id))")
+            debugLog("[Meshtastic] Disconnected from node \(node.longName ?? "unknown") (#\(node.id))")
         }
     }
 
@@ -2817,7 +2874,7 @@ extension AppCoordinator: MeshtasticBLEManagerDelegate {
                     let payload = try Self.wireDecoder.decode(WirePayloadV2.self, from: plaintext)
                     try await applyIncomingPayload(payload, source: .ble)
                 } catch {
-                    print("[Meshtastic] Failed to decode group envelope: \(error)")
+                    debugLog("[Meshtastic] Failed to decode group envelope: \(error)")
                 }
             } else {
                 do {
@@ -2827,7 +2884,7 @@ extension AppCoordinator: MeshtasticBLEManagerDelegate {
                         await processIncomingEnvelope(envelope, source: .ble)
                     }
                 } catch {
-                    print("[Meshtastic] Failed to decode direct envelope: \(error)")
+                    debugLog("[Meshtastic] Failed to decode direct envelope: \(error)")
                 }
             }
         }

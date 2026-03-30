@@ -18,13 +18,13 @@ extension BLEManager: CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         if let error {
-            print("[Pigeon] Failed to add service: \(error.localizedDescription)")
+            debugLog("[Pigeon] Failed to add service: \(error.localizedDescription)")
         }
     }
 
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
         if let error {
-            print("[Pigeon] Failed to start advertising: \(error.localizedDescription)")
+            debugLog("[Pigeon] Failed to start advertising: \(error.localizedDescription)")
         }
     }
 
