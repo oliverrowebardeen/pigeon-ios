@@ -15,7 +15,6 @@ nonisolated protocol RelaySessionActorDelegate: AnyObject {
     func relaySession(_ session: RelaySessionActor, didConnect path: RelayTransportPath) async
     func relaySession(_ session: RelaySessionActor, didDisconnect path: RelayTransportPath) async
     func relaySession(_ session: RelaySessionActor, didReceiveEnvelope envelope: MessageEnvelope) async
-    func relaySession(_ session: RelaySessionActor, didReceiveDeliveryAck messageID: UUID) async
 }
 
 actor RelaySessionActor {
@@ -138,21 +137,6 @@ actor RelaySessionActor {
         }
     }
 
-    func sendDeliveryACK(messageID: UUID) async throws {
-        guard isAuthenticated else {
-            throw RelaySessionActorError.notConnected
-        }
-
-        do {
-            try await sendFrame(
-                type: "msg_ack",
-                payload: RelayMessageAckPayload(messageID: messageID.uuidString)
-            )
-        } catch {
-            await handleOutboundFailure(error)
-            throw error
-        }
-    }
 
     private func waitForAuthentication() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -239,11 +223,7 @@ actor RelaySessionActor {
             await delegate?.relaySession(self, didReceiveEnvelope: envelope)
 
         case "msg_acked":
-            let payload: RelayMessageAckedPayload = try decodePayload(payloadAny)
-            guard let messageID = UUID(uuidString: payload.messageID) else {
-                throw RelaySessionActorError.invalidPayload
-            }
-            await delegate?.relaySession(self, didReceiveDeliveryAck: messageID)
+            break  // Legacy — acks now handled client-side via encrypted messages
 
         case "msg_accepted":
             let payload: RelayMessageAcceptedPayload = try decodePayload(payloadAny)
@@ -493,13 +473,6 @@ private struct RelayMessageSendPayload: Codable {
     }
 }
 
-private struct RelayMessageAckPayload: Codable {
-    let messageID: String
-
-    enum CodingKeys: String, CodingKey {
-        case messageID = "message_id"
-    }
-}
 
 private struct RelayMessageAcceptedPayload: Codable {
     let messageID: String
@@ -513,9 +486,9 @@ private struct RelayMessageAcceptedPayload: Codable {
     }
 }
 
-private struct RelayMessageDeliverPayload: Codable {
+struct RelayMessageDeliverPayload: Codable {
     let messageID: String
-    let senderHashHex: String
+    let senderHashHex: String?
     let envelopeB64: String
     let queuedAtMS: Int64
 
@@ -524,16 +497,6 @@ private struct RelayMessageDeliverPayload: Codable {
         case senderHashHex = "sender_hash_hex"
         case envelopeB64 = "envelope_b64"
         case queuedAtMS = "queued_at_ms"
-    }
-}
-
-private struct RelayMessageAckedPayload: Codable {
-    let messageID: String
-    let ackedAtMS: Int64
-
-    enum CodingKeys: String, CodingKey {
-        case messageID = "message_id"
-        case ackedAtMS = "acked_at_ms"
     }
 }
 
