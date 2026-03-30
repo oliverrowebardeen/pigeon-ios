@@ -65,6 +65,42 @@ nonisolated struct CryptoManager: Sendable {
         )
     }
 
+    /// Encrypts using an ephemeral Curve25519 key pair so that the real sender's
+    /// identity is hidden from the envelope header (sealed sender).
+    /// The envelope's `senderPublicKey` will contain the ephemeral public key.
+    /// The caller is responsible for including the real sender identity inside the plaintext
+    /// (e.g., in `WirePayloadV2.senderPublicKey`).
+    func encryptSealed(
+        plaintext: Data,
+        recipientPublicKeyData: Data,
+        messageID: UUID = UUID(),
+        timestamp: Date = Date(),
+        hopCount: UInt8 = 0,
+        ttl: UInt8 = BLEConstants.defaultTTL
+    ) throws -> MessageEnvelope {
+        let ephemeralKey = Curve25519.KeyAgreement.PrivateKey()
+
+        let symmetricKey = try deriveSharedKey(
+            myPrivateKey: ephemeralKey,
+            peerPublicKeyData: recipientPublicKeyData
+        )
+
+        let nonce = AES.GCM.Nonce()
+        let sealedBox = try AES.GCM.seal(plaintext, using: symmetricKey, nonce: nonce)
+
+        return MessageEnvelope(
+            id: messageID,
+            senderPublicKey: ephemeralKey.publicKey.rawRepresentation,
+            recipientPublicKey: recipientPublicKeyData,
+            timestamp: timestamp,
+            nonce: Data(nonce),
+            ciphertext: sealedBox.ciphertext,
+            tag: sealedBox.tag,
+            hopCount: hopCount,
+            ttl: ttl
+        )
+    }
+
     func encrypt(
         plaintext: String,
         senderPrivateKey: Curve25519.KeyAgreement.PrivateKey,

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import Pigeon
@@ -33,5 +34,26 @@ struct SealedSenderTests {
         #expect(decoded.eventType == .deliveryAck)
         #expect(decoded.deliveryAck?.ackedMessageID == ackMessageID)
         #expect(decoded.directText == nil)
+    }
+
+    @Test("Ephemeral key envelope decrypts correctly and hides real sender")
+    func ephemeralKeyRoundTrip() throws {
+        let crypto = CryptoManager()
+        let senderReal = Curve25519.KeyAgreement.PrivateKey()
+        let recipient = Curve25519.KeyAgreement.PrivateKey()
+
+        let plaintext = Data("sealed sender test".utf8)
+
+        let envelope = try crypto.encryptSealed(
+            plaintext: plaintext,
+            recipientPublicKeyData: recipient.publicKey.rawRepresentation
+        )
+
+        // Envelope header should NOT contain the real sender's public key
+        #expect(envelope.senderPublicKey != senderReal.publicKey.rawRepresentation)
+
+        // Recipient can still decrypt using the ephemeral key in the header
+        let decrypted = try crypto.decrypt(envelope: envelope, recipientPrivateKey: recipient)
+        #expect(decrypted == plaintext)
     }
 }
