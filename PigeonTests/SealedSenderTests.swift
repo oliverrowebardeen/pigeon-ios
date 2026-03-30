@@ -36,6 +36,31 @@ struct SealedSenderTests {
         #expect(decoded.directText == nil)
     }
 
+    @Test("RelayMessageDeliverPayload decodes without sender_hash_hex")
+    func deliverPayloadWithoutSenderHash() throws {
+        let json = """
+        {"message_id":"550e8400-e29b-41d4-a716-446655440000","envelope_b64":"dGVzdA==","queued_at_ms":1234567890000}
+        """
+        let data = Data(json.utf8)
+        let decoder = JSONDecoder()
+
+        let payload = try decoder.decode(RelayMessageDeliverPayload.self, from: data)
+        #expect(payload.senderHashHex == nil)
+        #expect(payload.messageID == "550e8400-e29b-41d4-a716-446655440000")
+    }
+
+    @Test("RelayMessageDeliverPayload still decodes with sender_hash_hex")
+    func deliverPayloadWithSenderHash() throws {
+        let json = """
+        {"message_id":"550e8400-e29b-41d4-a716-446655440000","sender_hash_hex":"abcdef","envelope_b64":"dGVzdA==","queued_at_ms":1234567890000}
+        """
+        let data = Data(json.utf8)
+        let decoder = JSONDecoder()
+
+        let payload = try decoder.decode(RelayMessageDeliverPayload.self, from: data)
+        #expect(payload.senderHashHex == "abcdef")
+    }
+
     @Test("Ephemeral key envelope decrypts correctly and hides real sender")
     func ephemeralKeyRoundTrip() throws {
         let crypto = CryptoManager()

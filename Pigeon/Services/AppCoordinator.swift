@@ -2562,10 +2562,4 @@ extension AppCoordinator: InternetRelayClientDelegate {
         }
     }
 
-    nonisolated func relayClient(didReceiveDeliveryAck messageID: UUID) {
-        Task { @MainActor in
-            await router.acknowledgeDelivery(messageID)
-            await markOutgoingMessageAsSent(messageID)
-        }
-    }
 }

@@ -20,7 +20,7 @@ nonisolated struct BridgeCandidate: Hashable, Sendable {
 nonisolated protocol InternetRelayClientDelegate: AnyObject {
     func relayClientDidUpdateState(_ state: TransportState, activeBridge: BridgeCandidate?)
     func relayClient(didReceiveEnvelope envelope: MessageEnvelope)
-    func relayClient(didReceiveDeliveryAck messageID: UUID)
+
 }
 
 actor InternetRelayClient {
@@ -354,12 +354,6 @@ actor InternetRelayClient {
         }
     }
 
-    private func notifyReceivedDeliveryAck(_ messageID: UUID) {
-        guard let delegate else { return }
-        Task { @MainActor in
-            delegate.relayClient(didReceiveDeliveryAck: messageID)
-        }
-    }
 }
 
 extension InternetRelayClient: RelaySessionActorDelegate {
@@ -384,7 +378,4 @@ extension InternetRelayClient: RelaySessionActorDelegate {
         notifyReceivedEnvelope(envelope)
     }
 
-    func relaySession(_ session: RelaySessionActor, didReceiveDeliveryAck messageID: UUID) async {
-        notifyReceivedDeliveryAck(messageID)
-    }
 }
