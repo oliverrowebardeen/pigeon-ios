@@ -171,10 +171,6 @@ actor InternetRelayClient {
         try await session.sendEnvelope(envelope)
     }
 
-    func sendDeliveryACK(messageID: UUID) async throws {
-        try await session.sendDeliveryACK(messageID: messageID)
-    }
-
     private func connectPreferredPath(forceDirectRetry: Bool) async {
         guard isRunning else { return }
         guard !isConnecting else { return }

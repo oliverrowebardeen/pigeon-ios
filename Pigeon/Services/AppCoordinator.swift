@@ -1397,10 +1397,6 @@ final class AppCoordinator {
             // Drop malformed or undecryptable envelope payload — no ACK sent.
         }
 
-        // Server-side queue cleanup ACK (kept — tells server to dequeue, doesn't leak sender)
-        if source == .relay {
-            await acknowledgeRelayMessage(envelope.id)
-        }
     }
 
     private func applyIncomingPayload(_ payload: WirePayloadV2, source: InboundSource) async throws {
@@ -1992,10 +1988,6 @@ final class AppCoordinator {
         return false
     }
 
-    private func acknowledgeRelayMessage(_ messageID: UUID) async {
-        guard let relayClient else { return }
-        try? await relayClient.sendDeliveryACK(messageID: messageID)
-    }
 
     private func scheduleDeliveryTimeout(for messageID: UUID) {
         cancelDeliveryTimeout(for: messageID)

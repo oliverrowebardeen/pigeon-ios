@@ -137,21 +137,6 @@ actor RelaySessionActor {
         }
     }
 
-    func sendDeliveryACK(messageID: UUID) async throws {
-        guard isAuthenticated else {
-            throw RelaySessionActorError.notConnected
-        }
-
-        do {
-            try await sendFrame(
-                type: "msg_ack",
-                payload: RelayMessageAckPayload(messageID: messageID.uuidString)
-            )
-        } catch {
-            await handleOutboundFailure(error)
-            throw error
-        }
-    }
 
     private func waitForAuthentication() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -488,13 +473,6 @@ private struct RelayMessageSendPayload: Codable {
     }
 }
 
-private struct RelayMessageAckPayload: Codable {
-    let messageID: String
-
-    enum CodingKeys: String, CodingKey {
-        case messageID = "message_id"
-    }
-}
 
 private struct RelayMessageAcceptedPayload: Codable {
     let messageID: String
