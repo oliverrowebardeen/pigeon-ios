@@ -1954,14 +1954,18 @@ final class AppCoordinator {
         _ envelope: MessageEnvelope,
         recipientPublicKey: Data
     ) async -> Bool {
+        let recipientHex = recipientPublicKey.prefix(4).map { String(format: "%02x", $0) }.joined()
+
         // 1. Peer is directly connected — send via BLE
         if isPeerNearby(publicKey: recipientPublicKey) {
+            print("[Pigeon Transport] Step 1: DIRECT BLE send to \(recipientHex)…")
             bleManager.sendMessage(envelope, to: recipientPublicKey)
             return false
         }
 
         // 2. Peer is mesh-reachable — send via mesh (mesh-first, skip relay)
         if meshReachabilityCache[recipientPublicKey] == true {
+            print("[Pigeon Transport] Step 2: MESH-REACHABLE send to \(recipientHex)…")
             bleManager.sendMessage(envelope, to: recipientPublicKey)
             return false
         }
@@ -1970,24 +1974,46 @@ final class AppCoordinator {
 
         // 3a. We have internet — send to relay directly
         if hasInternetConnectivity, let relayClient {
+            print("[Pigeon Transport] Step 3a: INTERNET RELAY send to \(recipientHex)…")
             do {
                 try await relayClient.sendEnvelope(envelope)
                 return true
             } catch {
+                print("[Pigeon Transport] Step 3a: relay send FAILED: \(error)")
                 // Relay failed, fall through to mesh attempts
             }
         }
 
+        if let relayClient {
+            print("[Pigeon Transport] Step 3a-alt: BRIDGE BOOTSTRAP send to \(recipientHex)…")
+            do {
+                await relayClient.updateBridgeCandidates(currentBridgeCandidates())
+                try await relayClient.sendEnvelopeBootstrappingBridgeIfNeeded(envelope)
+                return true
+            } catch {
+                print("[Pigeon Transport] Step 3a-alt: bridge bootstrap FAILED: \(error)")
+            }
+        }
+
         // 3b. No internet but a gateway exists in the mesh — route toward it
+        // Send to recipientPublicKey (not gatewayHop) so BLEManager's forwarding
+        // loop adds the routing header that firmware's bridgeToRelay() requires.
         let directPeerKeys = nearbyPeers.map(\.publicKey)
         if let gatewayHop = await meshTopology.firstHopToGateway(from: directPeerKeys) {
-            bleManager.sendMessage(envelope, to: gatewayHop)
+            let gwHex = gatewayHop.prefix(4).map { String(format: "%02x", $0) }.joined()
+            print("[Pigeon Transport] Step 3b: MESH GATEWAY send to \(recipientHex)… (gateway=\(gwHex))")
+            bleManager.sendMessage(envelope, to: recipientPublicKey)
             return false
+        } else {
+            print("[Pigeon Transport] Step 3b: firstHopToGateway returned nil (directPeers=\(directPeerKeys.count), hasInternet=\(hasInternetConnectivity))")
         }
 
         // 4. No internet, no gateway — flood to mesh and hope
         if canAttemptBLEMeshDelivery(to: recipientPublicKey) {
+            print("[Pigeon Transport] Step 4: MESH FLOOD send to \(recipientHex)… (nearbyPeers=\(nearbyPeers.count))")
             bleManager.sendMessage(envelope, to: recipientPublicKey)
+        } else {
+            print("[Pigeon Transport] NO PATH AVAILABLE for \(recipientHex) — message will be queued")
         }
         return false
     }
@@ -2547,6 +2573,17 @@ extension AppCoordinator: BLEManagerDelegate {
                 nearbyPeers[index].relayReachable = status.isOnline
                 nearbyPeers[index].bridgeEnabled = status.bridge != "no_wifi"
                 nearbyPeers[index].bridgeState = status.bridge
+                nearbyPeers[index].bridgeCapacityRemaining = status.capacityRemaining ?? nearbyPeers[index].bridgeCapacityRemaining
+
+                // Update mesh topology gateway flag so firstHopToGateway() finds this node
+                let existing = await meshTopology.nodeReachability(for: nodePublicKey)
+                await meshTopology.update(
+                    sender: nodePublicKey,
+                    reachablePeers: existing.map { Array($0.reachablePeers) } ?? [],
+                    hasInternetGateway: status.isOnline,
+                    timestamp: Date()
+                )
+                refreshBridgeCandidates()
             }
         }
     }

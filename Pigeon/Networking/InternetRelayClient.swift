@@ -171,6 +171,25 @@ actor InternetRelayClient {
         try await session.sendEnvelope(envelope)
     }
 
+    func sendEnvelopeBootstrappingBridgeIfNeeded(_ envelope: MessageEnvelope) async throws {
+        if currentState == .internetDirectConnected || currentState == .internetBridgedConnected {
+            try await session.sendEnvelope(envelope)
+            return
+        }
+
+        guard bridgeFallbackEnabled, hasEligibleBridgeCandidate() else {
+            throw RelaySessionActorError.notConnected
+        }
+
+        try await connectPreferredPath(forceDirectRetry: false)
+
+        guard currentState == .internetBridgedConnected || currentState == .internetDirectConnected else {
+            throw RelaySessionActorError.notConnected
+        }
+
+        try await session.sendEnvelope(envelope)
+    }
+
     private func connectPreferredPath(forceDirectRetry: Bool) async {
         guard isRunning else { return }
         guard !isConnecting else { return }
