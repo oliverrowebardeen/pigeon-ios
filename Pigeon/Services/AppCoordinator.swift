@@ -1149,9 +1149,8 @@ final class AppCoordinator {
             )
             let payloadData = try Self.wireEncoder.encode(payload)
 
-            let envelope = try crypto.encrypt(
+            let envelope = try crypto.encryptSealed(
                 plaintext: payloadData,
-                senderPrivateKey: identity.privateKey,
                 recipientPublicKeyData: recipientKey,
                 messageID: message.id,
                 timestamp: message.timestamp
@@ -1368,24 +1367,37 @@ final class AppCoordinator {
             return
         }
 
-        guard peerKeyChangeWarnings[envelope.senderPublicKey] == nil else {
-            return
-        }
-
         do {
             let decrypted = try crypto.decrypt(envelope: envelope, recipientPrivateKey: identity.privateKey)
             let payload = try Self.wireDecoder.decode(WirePayloadV2.self, from: decrypted)
 
+            // Sealed sender: real sender identity comes from the decrypted payload,
+            // not the envelope header (which may contain an ephemeral key).
+            let senderPublicKey = payload.senderPublicKey
+
+            guard peerKeyChangeWarnings[senderPublicKey] == nil else {
+                return
+            }
+
             try await applyIncomingPayload(payload, source: source)
 
-            // ACK only after successful decryption and processing
+            // BLE transport-layer ACK (not delivery receipt)
             if source == .ble {
                 bleManager.sendACK(for: envelope)
+            }
+
+            // Client-side delivery ack — send encrypted ack back to real sender
+            if source == .relay {
+                await sendClientSideDeliveryAck(
+                    for: payload.logicalMessageID,
+                    to: senderPublicKey
+                )
             }
         } catch {
             // Drop malformed or undecryptable envelope payload — no ACK sent.
         }
 
+        // Server-side queue cleanup ACK (kept — tells server to dequeue, doesn't leak sender)
         if source == .relay {
             await acknowledgeRelayMessage(envelope.id)
         }
@@ -1408,7 +1420,7 @@ final class AppCoordinator {
         case .groupReaction:
             try handleIncomingGroupReaction(payload)
         case .deliveryAck:
-            break // handled in a later task
+            try handleIncomingDeliveryAck(payload)
         }
 
         markMessagesChanged()
@@ -1856,9 +1868,8 @@ final class AppCoordinator {
         // Pre-encrypt envelopes for each member (sync, fast)
         var envelopes: [(key: Data, envelope: MessageEnvelope)] = []
         for memberKey in memberKeys {
-            let envelope = try crypto.encrypt(
+            let envelope = try crypto.encryptSealed(
                 plaintext: payloadData,
-                senderPrivateKey: identity.privateKey,
                 recipientPublicKeyData: memberKey,
                 messageID: UUID(),
                 timestamp: payload.timestamp
@@ -1893,14 +1904,50 @@ final class AppCoordinator {
 
     private func sendWirePayload(_ payload: WirePayloadV2, to recipientPublicKey: Data) async throws {
         let payloadData = try Self.wireEncoder.encode(payload)
-        let envelope = try crypto.encrypt(
+        let envelope = try crypto.encryptSealed(
             plaintext: payloadData,
-            senderPrivateKey: identity.privateKey,
             recipientPublicKeyData: recipientPublicKey,
             messageID: UUID(),
             timestamp: payload.timestamp
         )
         _ = await sendViaAvailableTransports(envelope, recipientPublicKey: recipientPublicKey)
+    }
+
+    private func sendClientSideDeliveryAck(for messageID: UUID, to recipientPublicKey: Data) async {
+        let payload = WirePayloadV2(
+            eventType: .deliveryAck,
+            logicalMessageID: UUID(),
+            senderPublicKey: identity.publicKey.rawRepresentation,
+            deliveryAck: DeliveryAckPayload(ackedMessageID: messageID)
+        )
+
+        do {
+            try await sendWirePayload(payload, to: recipientPublicKey)
+        } catch {
+            // Best-effort — delivery acks are not critical
+        }
+    }
+
+    private func handleIncomingDeliveryAck(_ payload: WirePayloadV2) throws {
+        guard let ack = payload.deliveryAck else {
+            throw AppCoordinatorError.invalidWirePayload
+        }
+
+        // Clear from mesh router outbound queue
+        Task {
+            await router.acknowledgeDelivery(ack.ackedMessageID)
+        }
+
+        guard let message = try store.fetchMessage(id: ack.ackedMessageID),
+              !message.isIncoming,
+              message.status != .failed,
+              message.status != .delivered
+        else {
+            return
+        }
+
+        cancelDeliveryTimeout(for: ack.ackedMessageID)
+        try store.updateMessageStatus(id: ack.ackedMessageID, status: .delivered)
     }
 
     private func sendViaAvailableTransports(
@@ -2216,9 +2263,8 @@ final class AppCoordinator {
             )
             let payloadData = try Self.wireEncoder.encode(payload)
 
-            let envelope = try crypto.encrypt(
+            let envelope = try crypto.encryptSealed(
                 plaintext: payloadData,
-                senderPrivateKey: identity.privateKey,
                 recipientPublicKeyData: recipientKey,
                 messageID: message.id,
                 timestamp: message.timestamp
