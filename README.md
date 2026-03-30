@@ -12,7 +12,7 @@ Pigeon is an encrypted mesh messenger for iOS. It sends text messages between iP
 - **End-to-end encryption** — Curve25519 ECDH key agreement, AES-256-GCM authenticated encryption, HKDF-SHA256 key derivation. Keys generated on-device and stored in the iOS Keychain.
 - **Internet relay fallback** — When both devices have internet, messages route through an encrypted WebSocket relay with X25519 challenge-response authentication.
 - **Bridge mode** — A phone with internet access can relay messages for nearby offline phones, bridging BLE mesh to the internet relay transparently.
-- **Meshtastic LoRa support** — Connect to any stock Meshtastic node for long-range mesh messaging over LoRa radio. Compact binary wire format fits encrypted envelopes within LoRa payload limits. Uses Meshtastic portnum 256 — Pigeon traffic is invisible to other Meshtastic apps.
+- **Meshtastic LoRa support** — Long-range mesh messaging over LoRa radio. Connect directly to stock Meshtastic nodes via Meshtastic BLE, or use a Pigeon mesh node in Meshtastic mode for seamless interop. Compact binary wire format fits encrypted envelopes within LoRa payload limits. Uses Meshtastic portnum 256 — Pigeon traffic is invisible to other Meshtastic apps.
 - **Group messaging** — Symmetric key encryption with epoch-based key rotation on membership changes. Owner-controlled member management. Groups use single-broadcast envelopes over LoRa instead of per-member fan-out.
 - **Push notifications** — APNS integration through the relay server. The server sends push payloads without ever seeing message content.
 - **QR code identity sharing** — Share your Pigeon ID via QR code for easy peer discovery.
@@ -64,7 +64,8 @@ Pigeon automatically selects the best available transport:
 2. **BLE Mesh** — Phones are out of direct range but other Pigeon devices are nearby. Messages hop through intermediate phones (up to 5 hops by default).
 3. **Internet Relay** — Both phones have internet. Messages route through the relay server via encrypted WebSocket. The server authenticates via X25519 challenge-response — no accounts, no passwords.
 4. **Bridge** — One phone has internet, the other doesn't. The internet-connected phone acts as a bridge, forwarding BLE messages to the relay server and vice versa. Selection uses hysteresis to prevent thrashing between candidates.
-5. **Meshtastic LoRa** — Connect to any stock Meshtastic node via BLE for long-range mesh messaging over LoRa radio. Messages use a compact binary envelope format (114 bytes overhead) instead of JSON to fit within LoRa payload limits (~230 bytes). The app uses Meshtastic portnum 256 (PRIVATE_APP) — non-Pigeon Meshtastic traffic is ignored.
+5. **Pigeon Node (Meshtastic Mode)** — A Pigeon mesh node with `loraMode: "meshtastic"` bridges Pigeon BLE to Meshtastic LoRa. The phone sends compact binary envelopes over the Pigeon BLE protocol; the node relays them as Meshtastic packets. Interoperable with stock Meshtastic nodes on the same mesh.
+6. **Stock Meshtastic LoRa** — Connect directly to any stock Meshtastic node via Meshtastic BLE for long-range mesh messaging over LoRa radio. Messages use a compact binary envelope format (114 bytes overhead) instead of JSON to fit within LoRa payload limits (~230 bytes). The app uses Meshtastic portnum 256 (PRIVATE_APP) — non-Pigeon Meshtastic traffic is ignored.
 
 Transport switching is automatic and transparent. The app shows the current transport state in the UI.
 
@@ -118,14 +119,14 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 - End-to-end encryption (Curve25519 + AES-256-GCM)
 - Internet relay transport with WebSocket and X25519 auth
 - Bridge mode (BLE-to-internet forwarding)
-- Meshtastic LoRa transport (stock Meshtastic node BLE, compact binary envelopes)
+- Meshtastic LoRa transport (stock Meshtastic BLE + Pigeon node meshtastic mode, compact binary envelopes)
 - Group messaging with epoch-based key rotation
 - Push notifications via APNS
 - QR code identity sharing
 - Contact management with trust verification
 - Message reactions and replies
 - Read receipts
-- Automatic transport switching (BLE > Pigeon mesh > relay > Meshtastic > flood)
+- Automatic transport switching (BLE > Pigeon mesh > relay > Pigeon meshtastic > stock Meshtastic > flood)
 
 ### Planned
 
