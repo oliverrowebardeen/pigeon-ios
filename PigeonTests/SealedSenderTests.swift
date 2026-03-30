@@ -81,4 +81,100 @@ struct SealedSenderTests {
         let decrypted = try crypto.decrypt(envelope: envelope, recipientPrivateKey: recipient)
         #expect(decrypted == plaintext)
     }
+
+    // MARK: - Integration Tests
+
+    @Test("Full sealed sender flow: sender identity only in decrypted payload")
+    func sealedSenderFullFlow() throws {
+        let crypto = CryptoManager()
+        let sender = Curve25519.KeyAgreement.PrivateKey()
+        let recipient = Curve25519.KeyAgreement.PrivateKey()
+
+        let payload = WirePayloadV2(
+            eventType: .directText,
+            logicalMessageID: UUID(),
+            senderPublicKey: sender.publicKey.rawRepresentation,
+            directText: DirectTextPayload(text: "hello sealed", reply: nil)
+        )
+        let payloadData = try Self.wireEncoder.encode(payload)
+
+        let envelope = try crypto.encryptSealed(
+            plaintext: payloadData,
+            recipientPublicKeyData: recipient.publicKey.rawRepresentation
+        )
+
+        // The envelope header does NOT reveal the real sender
+        #expect(envelope.senderPublicKey != sender.publicKey.rawRepresentation)
+        // The envelope header DOES show the recipient (needed for routing)
+        #expect(envelope.recipientPublicKey == recipient.publicKey.rawRepresentation)
+
+        // Recipient decrypts — the ephemeral key in the header is used for ECDH
+        let decrypted = try crypto.decrypt(envelope: envelope, recipientPrivateKey: recipient)
+        let decoded = try Self.wireDecoder.decode(WirePayloadV2.self, from: decrypted)
+
+        // Real sender identity is inside the decrypted payload
+        #expect(decoded.senderPublicKey == sender.publicKey.rawRepresentation)
+        #expect(decoded.directText?.text == "hello sealed")
+    }
+
+    @Test("Delivery ack survives encryption round-trip")
+    func deliveryAckEncryptionRoundTrip() throws {
+        let crypto = CryptoManager()
+        let acker = Curve25519.KeyAgreement.PrivateKey()
+        let originalSender = Curve25519.KeyAgreement.PrivateKey()
+        let ackedMessageID = UUID()
+
+        let payload = WirePayloadV2(
+            eventType: .deliveryAck,
+            logicalMessageID: UUID(),
+            senderPublicKey: acker.publicKey.rawRepresentation,
+            deliveryAck: DeliveryAckPayload(ackedMessageID: ackedMessageID)
+        )
+        let payloadData = try Self.wireEncoder.encode(payload)
+
+        let envelope = try crypto.encryptSealed(
+            plaintext: payloadData,
+            recipientPublicKeyData: originalSender.publicKey.rawRepresentation
+        )
+
+        let decrypted = try crypto.decrypt(envelope: envelope, recipientPrivateKey: originalSender)
+        let decoded = try Self.wireDecoder.decode(WirePayloadV2.self, from: decrypted)
+
+        #expect(decoded.eventType == .deliveryAck)
+        #expect(decoded.deliveryAck?.ackedMessageID == ackedMessageID)
+        #expect(decoded.senderPublicKey == acker.publicKey.rawRepresentation)
+    }
+
+    @Test("Legacy non-sealed envelope still decrypts correctly")
+    func legacyEnvelopeBackwardCompatibility() throws {
+        let crypto = CryptoManager()
+        let sender = Curve25519.KeyAgreement.PrivateKey()
+        let recipient = Curve25519.KeyAgreement.PrivateKey()
+
+        let payload = WirePayloadV2(
+            eventType: .directText,
+            logicalMessageID: UUID(),
+            senderPublicKey: sender.publicKey.rawRepresentation,
+            directText: DirectTextPayload(text: "legacy message", reply: nil)
+        )
+        let payloadData = try Self.wireEncoder.encode(payload)
+
+        // Old-style envelope: real sender key in header (not sealed)
+        let envelope = try crypto.encrypt(
+            plaintext: payloadData,
+            senderPrivateKey: sender,
+            recipientPublicKeyData: recipient.publicKey.rawRepresentation
+        )
+
+        // Envelope header matches real sender (old behavior)
+        #expect(envelope.senderPublicKey == sender.publicKey.rawRepresentation)
+
+        // Recipient can still decrypt
+        let decrypted = try crypto.decrypt(envelope: envelope, recipientPrivateKey: recipient)
+        let decoded = try Self.wireDecoder.decode(WirePayloadV2.self, from: decrypted)
+
+        // Sender identity from both envelope and payload match (old-style)
+        #expect(decoded.senderPublicKey == sender.publicKey.rawRepresentation)
+        #expect(decoded.directText?.text == "legacy message")
+    }
 }
