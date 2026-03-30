@@ -1407,6 +1407,8 @@ final class AppCoordinator {
             try handleIncomingGroupMessage(payload, source: source)
         case .groupReaction:
             try handleIncomingGroupReaction(payload)
+        case .deliveryAck:
+            break // handled in a later task
         }
 
         markMessagesChanged()

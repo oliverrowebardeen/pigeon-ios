@@ -8,6 +8,7 @@ nonisolated enum WireEventType: String, Codable, Hashable, Sendable {
     case groupControl = "group_control"
     case groupMessage = "group_message"
     case groupReaction = "group_reaction"
+    case deliveryAck = "delivery_ack"
 }
 
 nonisolated enum GroupControlAction: String, Codable, Hashable, Sendable {
@@ -92,6 +93,10 @@ nonisolated struct GroupEncryptedPayload: Codable, Hashable, Sendable {
     }
 }
 
+nonisolated struct DeliveryAckPayload: Codable, Hashable, Sendable {
+    let ackedMessageID: UUID
+}
+
 nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
     let version: Int
     let eventType: WireEventType
@@ -107,6 +112,7 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
     let groupKeyShare: GroupKeySharePayload?
     let groupControl: GroupControlPayload?
     let groupEncrypted: GroupEncryptedPayload?
+    let deliveryAck: DeliveryAckPayload?
 
     init(
         eventType: WireEventType,
@@ -120,7 +126,8 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
         directReaction: DirectReactionPayload? = nil,
         groupKeyShare: GroupKeySharePayload? = nil,
         groupControl: GroupControlPayload? = nil,
-        groupEncrypted: GroupEncryptedPayload? = nil
+        groupEncrypted: GroupEncryptedPayload? = nil,
+        deliveryAck: DeliveryAckPayload? = nil
     ) {
         version = 2
         self.eventType = eventType
@@ -135,6 +142,7 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
         self.groupKeyShare = groupKeyShare
         self.groupControl = groupControl
         self.groupEncrypted = groupEncrypted
+        self.deliveryAck = deliveryAck
     }
 }
 
