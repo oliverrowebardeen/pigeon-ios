@@ -12,10 +12,11 @@ Pigeon is an encrypted mesh messenger for iOS. It sends text messages between iP
 - **End-to-end encryption** — Curve25519 ECDH key agreement, AES-256-GCM authenticated encryption, HKDF-SHA256 key derivation. Keys generated on-device and stored in the iOS Keychain.
 - **Internet relay fallback** — When both devices have internet, messages route through an encrypted WebSocket relay with X25519 challenge-response authentication.
 - **Bridge mode** — A phone with internet access can relay messages for nearby offline phones, bridging BLE mesh to the internet relay transparently.
-- **Group messaging** — Symmetric key encryption with epoch-based key rotation on membership changes. Owner-controlled member management.
+- **Meshtastic LoRa support** — Connect to any stock Meshtastic node for long-range mesh messaging over LoRa radio. Compact binary wire format fits encrypted envelopes within LoRa payload limits. Uses Meshtastic portnum 256 — Pigeon traffic is invisible to other Meshtastic apps.
+- **Group messaging** — Symmetric key encryption with epoch-based key rotation on membership changes. Owner-controlled member management. Groups use single-broadcast envelopes over LoRa instead of per-member fan-out.
 - **Push notifications** — APNS integration through the relay server. The server sends push payloads without ever seeing message content.
 - **QR code identity sharing** — Share your Pigeon ID via QR code for easy peer discovery.
-- **Zero external dependencies** — Built entirely on Apple frameworks: CoreBluetooth, CryptoKit, SwiftData, SwiftUI.
+- **Zero external dependencies** — Built entirely on Apple frameworks: CoreBluetooth, CryptoKit, SwiftData, SwiftUI. Manual protobuf codec for Meshtastic BLE — no generated code or external libraries.
 
 ## Architecture
 
@@ -43,9 +44,16 @@ Pigeon is an encrypted mesh messenger for iOS. It sends text messages between iP
   └─────────┘      │(online) │      └──────────────┘      └─────────┘
                    └─────────┘
 
+                    Meshtastic LoRa (long-range, no internet)
+  ┌─────────┐      ┌─────────────┐      ┌─────────────┐      ┌─────────┐
+  │Phone A  │─BLE─►│ Meshtastic  │─LoRa►│ Meshtastic  │◄─BLE─│Phone B  │
+  │(sender) │      │ Node        │      │ Node        │      │(recipient)
+  └─────────┘      └─────────────┘      └─────────────┘      └─────────┘
+
   Encryption: E2E at every path. Relay server forwards AES-256-GCM
   ciphertext without decryption keys. Bridge phones forward opaque
-  encrypted frames — they cannot read the content either.
+  encrypted frames — they cannot read the content either. Meshtastic
+  nodes relay opaque compact envelopes — they cannot read content.
 ```
 
 ## Transport Modes
@@ -56,6 +64,7 @@ Pigeon automatically selects the best available transport:
 2. **BLE Mesh** — Phones are out of direct range but other Pigeon devices are nearby. Messages hop through intermediate phones (up to 5 hops by default).
 3. **Internet Relay** — Both phones have internet. Messages route through the relay server via encrypted WebSocket. The server authenticates via X25519 challenge-response — no accounts, no passwords.
 4. **Bridge** — One phone has internet, the other doesn't. The internet-connected phone acts as a bridge, forwarding BLE messages to the relay server and vice versa. Selection uses hysteresis to prevent thrashing between candidates.
+5. **Meshtastic LoRa** — Connect to any stock Meshtastic node via BLE for long-range mesh messaging over LoRa radio. Messages use a compact binary envelope format (114 bytes overhead) instead of JSON to fit within LoRa payload limits (~230 bytes). The app uses Meshtastic portnum 256 (PRIVATE_APP) — non-Pigeon Meshtastic traffic is ignored.
 
 Transport switching is automatic and transparent. The app shows the current transport state in the UI.
 
@@ -109,18 +118,20 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 - End-to-end encryption (Curve25519 + AES-256-GCM)
 - Internet relay transport with WebSocket and X25519 auth
 - Bridge mode (BLE-to-internet forwarding)
+- Meshtastic LoRa transport (stock Meshtastic node BLE, compact binary envelopes)
 - Group messaging with epoch-based key rotation
 - Push notifications via APNS
 - QR code identity sharing
 - Contact management with trust verification
 - Message reactions and replies
 - Read receipts
-- Automatic transport switching
+- Automatic transport switching (BLE > Pigeon mesh > relay > Meshtastic > flood)
 
 ### Planned
 
+- Meshtastic gateway bridging (LoRa-to-relay via firmware)
+- Connection priority state machine (auto-switch between Pigeon and Meshtastic nodes)
 - Android client
-- LoRa radio transport (long-range, low-power mesh)
 - Satellite transport
 - Desktop client
 - File/image sharing
@@ -129,6 +140,9 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 ## Known Limitations
 
 - **BLE range**: ~50-100 meters between devices, depending on environment
+- **LoRa message size**: ~120 byte plaintext limit over Meshtastic (compact envelope overhead + LoRa payload cap). Short text messages only — no images or files via LoRa.
+- **Meshtastic gateway**: LoRa-to-relay bridging not yet implemented. Meshtastic messages stay on the LoRa mesh.
+- **Meshtastic groups**: Group broadcast over LoRa uses a single envelope (efficient) but cannot be bridged to the relay server (relay is point-to-point only).
 - **iOS only**: No Android or desktop client yet
 - **BLE connections**: iOS allows ~7 simultaneous BLE connections
 - **Message size**: BLE MTU limits chunks to 480 bytes with 22-byte headers
@@ -139,6 +153,7 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 ## Related
 
 - **[pigeon-relay](https://github.com/oliverrowebardeen/pigeon-relay)** — The encrypted relay server (Rust). Handles WebSocket transport, X25519 authentication, message queuing, and APNS push delivery. Zero-knowledge design — never decrypts messages.
+- **[pigeon-firmware](https://github.com/oliverrowebardeen/pigeon-firmware)** — ESP32 firmware for dedicated Pigeon mesh nodes. Custom LoRa protocol, BLE GATT server, WiFi bridge to relay. Meshtastic LoRa integration in progress.
 
 ## License
 

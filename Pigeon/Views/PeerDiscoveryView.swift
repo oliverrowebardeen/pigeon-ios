@@ -6,13 +6,14 @@ struct PeerDiscoveryView: View {
     @State private var pendingWarningPeer: Peer?
     @State private var pendingWarning: PeerKeyChangeWarning?
     @State private var selectedMeshNode: Peer?
+    @State private var selectedMeshtasticNode: MeshtasticNode?
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ZStack {
                 PigeonTheme.background.ignoresSafeArea()
 
-                if coordinator.nearbyContacts.isEmpty && coordinator.connectedMeshNodeCount == 0 {
+                if coordinator.nearbyContacts.isEmpty && coordinator.connectedMeshNodeCount == 0 && coordinator.meshtasticNodes.isEmpty {
                     scanningState
                 } else {
                     peerList
@@ -47,6 +48,9 @@ struct PeerDiscoveryView: View {
             }
             .sheet(item: $selectedMeshNode) { node in
                 MeshNodeDetailSheet(node: node)
+            }
+            .sheet(item: $selectedMeshtasticNode) { node in
+                MeshtasticNodeDetailSheet(node: node)
             }
         }
     }
@@ -83,9 +87,27 @@ struct PeerDiscoveryView: View {
                     }
                 } header: {
                     HStack {
-                        Text("Mesh Nodes")
+                        Text("Pigeon Nodes")
                         Spacer()
                         Text("\(meshNodes.count)")
+                            .foregroundColor(PigeonTheme.accent)
+                    }
+                }
+            }
+
+            if !coordinator.meshtasticNodes.isEmpty {
+                Section {
+                    ForEach(coordinator.meshtasticNodes) { node in
+                        MeshtasticNodeRowView(node: node) {
+                            selectedMeshtasticNode = node
+                        }
+                        .listRowBackground(PigeonTheme.surface)
+                    }
+                } header: {
+                    HStack {
+                        Text("Meshtastic Nodes")
+                        Spacer()
+                        Text("\(coordinator.meshtasticNodes.count)")
                             .foregroundColor(PigeonTheme.accent)
                     }
                 }

@@ -36,6 +36,16 @@ nonisolated enum DirectConversationReachability: Sendable {
     case outOfRange
 }
 
+/// Transport type for a given recipient — used by UI for message limits.
+nonisolated enum TransportType: Sendable {
+    case directBLE
+    case pigeonMesh
+    case relay
+    case pigeonMeshtasticMesh  // Pigeon node in meshtastic mode
+    case meshtasticMesh        // Stock Meshtastic node
+    case none
+}
+
 @Observable
 @MainActor
 final class AppCoordinator {
@@ -67,9 +77,12 @@ final class AppCoordinator {
     let bridgeTunnelBroker: BridgeTunnelBroker?
     let relayURL: URL?
     let meshTopology = MeshTopology()
+    let meshtasticBLEManager = MeshtasticBLEManager()
 
     var conversations: [Conversation] = []
     var nearbyPeers: [Peer] = []
+    var meshtasticNodes: [MeshtasticNode] = []
+    var activeNodeConnection: NodeConnectionType?
     var nearbyContacts: [Peer] { nearbyPeers.filter { !$0.isMeshNode } }
     var connectedMeshNodeCount: Int { nearbyPeers.filter(\.isMeshNode).count }
     var bleState: BLEManager.State = .idle
@@ -106,6 +119,7 @@ final class AppCoordinator {
     private var meshReachabilityCache: [Data: Bool] = [:]
     private var meshNodeIntroducedPeers: [Data: Set<Data>] = [:]
     private var wifiRefreshTask: Task<Void, Never>?
+    private var didStartMeshtastic = false
 
     init(store: PigeonStore) throws {
         let identity = try PigeonIdentity.loadOrCreate()
@@ -163,6 +177,7 @@ final class AppCoordinator {
 
     func bootstrap() {
         activateBLEIfNeeded()
+        activateMeshtasticIfNeeded()
         activateRelayIfNeeded()
         restoreOutboundQueueIfNeeded()
     }
@@ -527,6 +542,51 @@ final class AppCoordinator {
 
     private func canAttemptBLEMeshDelivery(to recipientPublicKey: Data) -> Bool {
         return isPeerNearby(publicKey: recipientPublicKey) || !nearbyPeers.isEmpty
+    }
+
+    /// Whether a connected Pigeon mesh node is in Meshtastic LoRa mode.
+    private var hasMeshtasticModePigeonNode: Bool {
+        nearbyPeers.contains { $0.isMeshNode && $0.loraMode == "meshtastic" }
+    }
+
+    /// Determines the active transport for a given recipient (used by ChatView for limit display).
+    func transportForRecipient(_ publicKey: Data) -> TransportType {
+        if isPeerNearby(publicKey: publicKey) {
+            return .directBLE
+        }
+        if meshReachabilityCache[publicKey] == true {
+            return .pigeonMesh
+        }
+        if hasInternetConnectivity {
+            return .relay
+        }
+        if hasMeshtasticModePigeonNode {
+            return .pigeonMeshtasticMesh
+        }
+        if meshtasticBLEManager.state == .connected {
+            return .meshtasticMesh
+        }
+        if !nearbyPeers.isEmpty {
+            return .pigeonMesh
+        }
+        return .none
+    }
+
+    /// Transport for group messages — simplifies to whether relay is available.
+    func groupTransport() -> TransportType {
+        if hasInternetConnectivity {
+            return .relay
+        }
+        if hasMeshtasticModePigeonNode {
+            return .pigeonMeshtasticMesh
+        }
+        if meshtasticBLEManager.state == .connected {
+            return .meshtasticMesh
+        }
+        if !nearbyPeers.isEmpty {
+            return .pigeonMesh
+        }
+        return .none
     }
 
     private var hasInternetConnectivity: Bool {
@@ -1859,6 +1919,15 @@ final class AppCoordinator {
             return true
         }
 
+        // Meshtastic-only path: single group broadcast instead of N pairwise envelopes
+        let transport = groupTransport()
+        if transport == .pigeonMeshtasticMesh {
+            return try sendGroupPayloadViaPigeonMeshtastic(payload, groupID: groupID)
+        }
+        if transport == .meshtasticMesh && !hasInternetConnectivity {
+            return try sendGroupPayloadViaMeshtastic(payload, groupID: groupID)
+        }
+
         let payloadData = try Self.wireEncoder.encode(payload)
 
         // Pre-encrypt envelopes for each member (sync, fast)
@@ -1896,6 +1965,56 @@ final class AppCoordinator {
         }
 
         return results
+    }
+
+    /// Sends a group payload as a single broadcast via Meshtastic mesh.
+    /// Uses group AES-GCM key directly — all group members can decrypt.
+    /// Sends a group broadcast via a Pigeon mesh node in meshtastic mode.
+    /// The node passes the CompactEnvelope raw to Meshtastic LoRa.
+    private func sendGroupPayloadViaPigeonMeshtastic(_ payload: WirePayloadV2, groupID: UUID) throws -> Bool {
+        guard let group = try store.fetchGroup(id: groupID),
+              let groupKey = try keyStore.loadGroupSymmetricKey(groupID: groupID, epoch: group.activeEpoch) else {
+            throw AppCoordinatorError.missingGroupKey
+        }
+
+        let payloadData = try Self.wireEncoder.encode(payload)
+        let sealed = try groupCrypto.encrypt(payloadData, keyData: groupKey)
+        let compactData = CompactEnvelopeCodec.encodeGroupBroadcastEnvelope(
+            sealed: sealed,
+            groupID: groupID,
+            epoch: group.activeEpoch,
+            senderPublicKey: identity.publicKey.rawRepresentation
+        )
+
+        guard compactData.count <= 233 else {
+            return false
+        }
+
+        // Write raw CompactEnvelope to BLE message characteristic of meshtastic-mode mesh nodes
+        bleManager.broadcastRawData(compactData)
+        return true
+    }
+
+    private func sendGroupPayloadViaMeshtastic(_ payload: WirePayloadV2, groupID: UUID) throws -> Bool {
+        guard let group = try store.fetchGroup(id: groupID),
+              let groupKey = try keyStore.loadGroupSymmetricKey(groupID: groupID, epoch: group.activeEpoch) else {
+            throw AppCoordinatorError.missingGroupKey
+        }
+
+        let payloadData = try Self.wireEncoder.encode(payload)
+        let sealed = try groupCrypto.encrypt(payloadData, keyData: groupKey)
+        let compactData = CompactEnvelopeCodec.encodeGroupBroadcastEnvelope(
+            sealed: sealed,
+            groupID: groupID,
+            epoch: group.activeEpoch,
+            senderPublicKey: identity.publicKey.rawRepresentation
+        )
+
+        guard compactData.count <= MeshtasticConstants.maxLoRaPayloadSize else {
+            return false  // Too large for LoRa
+        }
+
+        return meshtasticBLEManager.sendPigeonPayload(compactData)
     }
 
     private func sendWirePayload(_ payload: WirePayloadV2, to recipientPublicKey: Data) async throws {
@@ -1981,7 +2100,27 @@ final class AppCoordinator {
             return false
         }
 
-        // 4. No internet, no gateway — flood to mesh and hope
+        // 4. Pigeon node in meshtastic mode — send CompactEnvelope via Pigeon BLE
+        if hasMeshtasticModePigeonNode {
+            let compactData = CompactEnvelopeCodec.encodeDirectEnvelope(envelope)
+            if compactData.count <= 233 {
+                bleManager.broadcastRawData(compactData)
+                return false
+            }
+            // Oversized — can't send via meshtastic, don't fall through to flood
+        }
+
+        // 5. Stock Meshtastic node — send CompactEnvelope via Meshtastic BLE
+        if meshtasticBLEManager.state == .connected {
+            let compactData = CompactEnvelopeCodec.encodeDirectEnvelope(envelope)
+            if compactData.count <= MeshtasticConstants.maxLoRaPayloadSize {
+                _ = meshtasticBLEManager.sendPigeonPayload(compactData)
+                return false
+            }
+            // Payload too large for LoRa — fall through
+        }
+
+        // 6. No internet, no gateway — flood to Pigeon mesh and hope
         if canAttemptBLEMeshDelivery(to: recipientPublicKey) {
             bleManager.sendMessage(envelope, to: recipientPublicKey)
         }
@@ -2172,6 +2311,13 @@ final class AppCoordinator {
         didStartBLE = true
         bleManager.delegate = self
         bleManager.start()
+    }
+
+    private func activateMeshtasticIfNeeded() {
+        guard !didStartMeshtastic else { return }
+        didStartMeshtastic = true
+        meshtasticBLEManager.delegate = self
+        meshtasticBLEManager.start()
     }
 
     private func activateRelayIfNeeded() {
@@ -2545,6 +2691,22 @@ extension AppCoordinator: BLEManagerDelegate {
         }
     }
 
+    nonisolated func bleManager(_ manager: BLEManager, didReceiveCompactGroupEnvelope sealed: GroupSealedPayload, groupID: UUID, epoch: Int, senderPublicKey: Data, timestamp: Date) {
+        Task { @MainActor in
+            do {
+                guard (try? store.fetchGroup(id: groupID)) != nil,
+                      let keyData = try? keyStore.loadGroupSymmetricKey(groupID: groupID, epoch: epoch) else {
+                    return
+                }
+                let plaintext = try groupCrypto.decrypt(sealed, keyData: keyData)
+                let payload = try Self.wireDecoder.decode(WirePayloadV2.self, from: plaintext)
+                try await applyIncomingPayload(payload, source: .ble)
+            } catch {
+                print("[Pigeon] Failed to decode compact group envelope from BLE: \(error)")
+            }
+        }
+    }
+
     nonisolated func bleManagerDidUpdateState(_ manager: BLEManager) {
         Task { @MainActor in
             bleState = manager.state
@@ -2600,4 +2762,84 @@ extension AppCoordinator: InternetRelayClientDelegate {
         }
     }
 
+}
+
+// MARK: - MeshtasticBLEManagerDelegate
+
+extension AppCoordinator: MeshtasticBLEManagerDelegate {
+    nonisolated func meshtasticManager(_ manager: MeshtasticBLEManager, didDiscoverNode node: MeshtasticNode) {
+        Task { @MainActor in
+            if let idx = meshtasticNodes.firstIndex(where: { $0.id == node.id }) {
+                meshtasticNodes[idx] = node
+            } else {
+                meshtasticNodes.append(node)
+            }
+        }
+    }
+
+    nonisolated func meshtasticManager(_ manager: MeshtasticBLEManager, didConnectToNode node: MeshtasticNode) {
+        Task { @MainActor in
+            activeNodeConnection = .meshtasticNode
+            if let idx = meshtasticNodes.firstIndex(where: { $0.id == node.id }) {
+                meshtasticNodes[idx] = node
+            }
+            print("[Meshtastic] Connected to node \(node.longName ?? "unknown") (#\(node.id))")
+        }
+    }
+
+    nonisolated func meshtasticManager(_ manager: MeshtasticBLEManager, didDisconnectFromNode node: MeshtasticNode) {
+        Task { @MainActor in
+            if activeNodeConnection == .meshtasticNode {
+                activeNodeConnection = connectedMeshNodeCount > 0 ? .pigeonNode : nil
+            }
+            if let idx = meshtasticNodes.firstIndex(where: { $0.id == node.id }) {
+                meshtasticNodes[idx] = node
+            }
+            print("[Meshtastic] Disconnected from node \(node.longName ?? "unknown") (#\(node.id))")
+        }
+    }
+
+    nonisolated func meshtasticManager(_ manager: MeshtasticBLEManager, didReceivePigeonEnvelope data: Data, fromMeshtasticNodeNum: UInt32) {
+        Task { @MainActor in
+            // Determine if direct or group envelope
+            if CompactEnvelopeCodec.isGroupBroadcast(data) {
+                do {
+                    let (sealed, groupID, epoch, _, _) = try CompactEnvelopeCodec.decodeGroupBroadcastEnvelope(data)
+
+                    // Look up group key via KeyStore
+                    guard (try? store.fetchGroup(id: groupID)) != nil,
+                          let keyData = try? keyStore.loadGroupSymmetricKey(groupID: groupID, epoch: epoch) else {
+                        return
+                    }
+
+                    // Decrypt with group symmetric key → WirePayloadV2
+                    let plaintext = try groupCrypto.decrypt(sealed, keyData: keyData)
+                    let payload = try Self.wireDecoder.decode(WirePayloadV2.self, from: plaintext)
+                    try await applyIncomingPayload(payload, source: .ble)
+                } catch {
+                    print("[Meshtastic] Failed to decode group envelope: \(error)")
+                }
+            } else {
+                do {
+                    let envelope = try CompactEnvelopeCodec.decodeDirectEnvelope(data)
+                    // Only process if addressed to us
+                    if envelope.recipientPublicKey == identity.publicKey.rawRepresentation {
+                        await processIncomingEnvelope(envelope, source: .ble)
+                    }
+                } catch {
+                    print("[Meshtastic] Failed to decode direct envelope: \(error)")
+                }
+            }
+        }
+    }
+
+    nonisolated func meshtasticManager(_ manager: MeshtasticBLEManager, didUpdateNodeList nodes: [MeshtasticNode]) {
+        Task { @MainActor in
+            meshtasticNodes = nodes
+        }
+    }
+
+    nonisolated func meshtasticManagerDidUpdateState(_ manager: MeshtasticBLEManager) {
+        // State changes are observed through meshtasticBLEManager.state directly
+    }
 }

@@ -19,4 +19,6 @@ nonisolated struct Peer: Identifiable, Hashable, Sendable {
     var bridgeState: String? = nil
     var bridgeCapacityRemaining: Int? = nil
     var meshDiscovered: Bool = false
+    var connectionType: NodeConnectionType = .direct
+    var loraMode: String = "native"
 }

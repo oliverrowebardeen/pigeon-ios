@@ -285,7 +285,8 @@ extension BLEManager: CBPeripheralDelegate {
                 bridgeEnabled: (existingPeer?.bridgeEnabled ?? false) || (payload.bridgeEnabled ?? false),
                 isMeshNode: payload.isMeshNode ?? false,
                 relayReachable: (existingPeer?.relayReachable ?? false) || (payload.relayReachable ?? false),
-                bridgeCapacityRemaining: existingPeer?.bridgeCapacityRemaining ?? payload.bridgeCapacityRemaining
+                bridgeCapacityRemaining: existingPeer?.bridgeCapacityRemaining ?? payload.bridgeCapacityRemaining,
+                loraMode: payload.loraMode ?? "native"
             )
 
             let isNew = nearbyPeers[payload.publicKey] == nil

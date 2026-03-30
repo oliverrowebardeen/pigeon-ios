@@ -14,6 +14,7 @@ protocol BLEManagerDelegate: AnyObject {
     func bleManager(_ manager: BLEManager, didRelayEnvelope envelope: MessageEnvelope)
     func bleManager(_ manager: BLEManager, didReceiveMeshPeers peers: [(pigeonID: String, publicKey: Data)], fromNodeWithPublicKey nodePublicKey: Data)
     func bleManager(_ manager: BLEManager, didReceiveMeshNodeBridgeStatus status: MeshNodeBridgeStatus, fromNodeWithPublicKey nodePublicKey: Data)
+    func bleManager(_ manager: BLEManager, didReceiveCompactGroupEnvelope sealed: GroupSealedPayload, groupID: UUID, epoch: Int, senderPublicKey: Data, timestamp: Date)
     func bleManagerDidUpdateState(_ manager: BLEManager)
 }
 
@@ -438,8 +439,11 @@ final class BLEManager: NSObject {
             guard peripheralPeerMap[peripheralID] != recipientPublicKey,
                   let messageChar = peripheralMessageChars[peripheralID] else { continue }
 
-            // Mesh nodes get the routing header so they can bridge to internet
-            if isMeshNode(peripheralID: peripheralID) {
+            if isMeshtasticMode(peripheralID: peripheralID) {
+                // Meshtastic-mode Pigeon node: send CompactEnvelope raw (no routing header, no chunking)
+                sendCompactEnvelope(envelope, to: peripheral, characteristic: messageChar)
+            } else if isMeshNode(peripheralID: peripheralID) {
+                // Native-mode Pigeon node: JSON + routing header for relay bridging
                 sendEnvelopeWithRoutingHeader(envelope, to: peripheral, characteristic: messageChar, recipientPublicKey: recipientPublicKey)
             } else {
                 sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
@@ -453,6 +457,11 @@ final class BLEManager: NSObject {
     private func isMeshNode(peripheralID: UUID) -> Bool {
         guard let publicKey = peripheralPeerMap[peripheralID] else { return false }
         return nearbyPeers[publicKey]?.isMeshNode == true
+    }
+
+    private func isMeshtasticMode(peripheralID: UUID) -> Bool {
+        guard let publicKey = peripheralPeerMap[peripheralID] else { return false }
+        return nearbyPeers[publicKey]?.loraMode == "meshtastic"
     }
 
     private func sendEnvelopeWithRoutingHeader(
@@ -475,6 +484,28 @@ final class BLEManager: NSObject {
         }
     }
 
+    /// Sends a CompactEnvelope to a meshtastic-mode Pigeon node, wrapped in Pigeon chunk framing.
+    /// No routing header — the node passes the payload directly to Meshtastic LoRa.
+    private func sendCompactEnvelope(_ envelope: MessageEnvelope, to peripheral: CBPeripheral, characteristic: CBCharacteristic) {
+        let compactData = CompactEnvelopeCodec.encodeDirectEnvelope(envelope)
+        guard compactData.count <= 233 else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                delegate?.bleManager(self, didFailMessage: envelope.id)
+            }
+            return
+        }
+        do {
+            let chunks = try MessageProtocol.chunk(data: compactData, messageID: UUID())
+            sendChunks(chunks, to: peripheral, characteristic: characteristic)
+        } catch {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                delegate?.bleManager(self, didFailMessage: envelope.id)
+            }
+        }
+    }
+
     func sendEnvelope(_ envelope: MessageEnvelope, to peripheral: CBPeripheral, characteristic: CBCharacteristic) {
         do {
             let chunks = try MessageProtocol.chunkEnvelope(envelope)
@@ -483,6 +514,20 @@ final class BLEManager: NSObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 delegate?.bleManager(self, didFailMessage: envelope.id)
+            }
+        }
+    }
+
+    /// Sends raw data (e.g. CompactEnvelope) to all connected meshtastic-mode Pigeon mesh nodes,
+    /// wrapped in Pigeon chunk framing so the firmware can parse it off the BLE message characteristic.
+    func broadcastRawData(_ data: Data) {
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+            guard let chunks = try? MessageProtocol.chunk(data: data, messageID: UUID()) else { return }
+            for (peripheralID, peripheral) in connectedPeripherals {
+                guard isMeshtasticMode(peripheralID: peripheralID),
+                      let messageChar = peripheralMessageChars[peripheralID] else { continue }
+                sendChunks(chunks, to: peripheral, characteristic: messageChar)
             }
         }
     }
@@ -512,6 +557,12 @@ final class BLEManager: NSObject {
     // MARK: - Internal: Handle received envelope
 
     func handleReassembledData(_ data: Data) {
+        // Check for CompactEnvelope from meshtastic-mode Pigeon nodes.
+        // After chunk reassembly, the payload is the raw CompactEnvelope bytes.
+        if handleCompactEnvelopeIfPresent(data) {
+            return
+        }
+
         do {
             let envelope = try MessageProtocol.decodeEnvelope(data)
             handleReceivedEnvelope(envelope)
@@ -689,6 +740,48 @@ final class BLEManager: NSObject {
         } catch {
             // Malformed packet
         }
+    }
+
+    /// Detects and handles a CompactEnvelope received from a meshtastic-mode Pigeon node.
+    /// Returns true if the data was a CompactEnvelope, false to fall through to chunked processing.
+    private func handleCompactEnvelopeIfPresent(_ data: Data) -> Bool {
+        // CompactEnvelope: byte 0 = version (0x01), byte 1 = flags (0x00 direct, 0x01 group)
+        guard data.count >= CompactEnvelopeCodec.groupHeaderSize,
+              data[data.startIndex] == 0x01,
+              (data[data.startIndex + 1] == 0x00 || data[data.startIndex + 1] == 0x01) else {
+            return false
+        }
+
+        if CompactEnvelopeCodec.isGroupBroadcast(data) {
+            do {
+                let (sealed, groupID, epoch, senderPubKey, timestamp) =
+                    try CompactEnvelopeCodec.decodeGroupBroadcastEnvelope(data)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    delegate?.bleManager(
+                        self,
+                        didReceiveCompactGroupEnvelope: sealed,
+                        groupID: groupID,
+                        epoch: epoch,
+                        senderPublicKey: senderPubKey,
+                        timestamp: timestamp
+                    )
+                }
+            } catch {
+                // Malformed group compact envelope
+            }
+        } else {
+            do {
+                let envelope = try CompactEnvelopeCodec.decodeDirectEnvelope(data)
+                guard envelope.recipientPublicKey == identity.publicKey.rawRepresentation else {
+                    return true // Not for us, but was a valid CompactEnvelope
+                }
+                handleMessageForUs(envelope)
+            } catch {
+                // Malformed direct compact envelope
+            }
+        }
+        return true
     }
 
     func processIncomingBridgeChunk(_ data: Data, source: BridgePacketSource) {
@@ -873,10 +966,13 @@ final class BLEManager: NSObject {
                       let peripheral = connectedPeripherals[peripheralID],
                       let messageChar = peripheralMessageChars[peripheralID] else { return }
 
+                let meshtasticMode = isMeshtasticMode(peripheralID: peripheralID)
                 let meshNode = isMeshNode(peripheralID: peripheralID)
 
                 for envelope in pending {
-                    if meshNode {
+                    if meshtasticMode {
+                        sendCompactEnvelope(envelope, to: peripheral, characteristic: messageChar)
+                    } else if meshNode {
                         sendEnvelopeWithRoutingHeader(envelope, to: peripheral, characteristic: messageChar, recipientPublicKey: envelope.recipientPublicKey)
                     } else {
                         sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
@@ -887,7 +983,9 @@ final class BLEManager: NSObject {
                     if envelope.senderPublicKey == peerPublicKey { continue }
                     if envelope.recipientPublicKey == peerPublicKey ||
                        envelope.hopCount < envelope.ttl {
-                        if meshNode {
+                        if meshtasticMode {
+                            sendCompactEnvelope(envelope, to: peripheral, characteristic: messageChar)
+                        } else if meshNode {
                             sendEnvelopeWithRoutingHeader(envelope, to: peripheral, characteristic: messageChar, recipientPublicKey: envelope.recipientPublicKey)
                         } else {
                             sendEnvelope(envelope, to: peripheral, characteristic: messageChar)

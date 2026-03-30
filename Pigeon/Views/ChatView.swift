@@ -227,7 +227,25 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+        let text = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty && !isSending else { return false }
+        // Enforce size limit when Meshtastic is the sole transport
+        if isMeshtasticOnlyTransport {
+            return text.utf8.count <= MeshtasticConstants.maxDirectCiphertextSize
+        }
+        return true
+    }
+
+    private var currentTransport: TransportType {
+        if conversation.kind == .group {
+            return coordinator.groupTransport()
+        }
+        guard let peerKey = conversation.peerPublicKey else { return .none }
+        return coordinator.transportForRecipient(peerKey)
+    }
+
+    private var isMeshtasticOnlyTransport: Bool {
+        currentTransport == .meshtasticMesh || currentTransport == .pigeonMeshtasticMesh
     }
 
     private var directConversationReachability: DirectConversationReachability {
@@ -236,6 +254,9 @@ struct ChatView: View {
 
     private var connectionBannerText: String {
         if conversation.kind == .group {
+            if isMeshtasticOnlyTransport {
+                return "Group chat via Meshtastic mesh."
+            }
             switch coordinator.transportState {
             case .internetDirectConnected:
                 return "Group chat active (direct internet + mesh fallback)."
@@ -244,6 +265,10 @@ struct ChatView: View {
             default:
                 return "Group chat active (mesh-first)."
             }
+        }
+
+        if isMeshtasticOnlyTransport {
+            return "Via Meshtastic mesh"
         }
 
         switch directConversationReachability {
@@ -262,6 +287,10 @@ struct ChatView: View {
     }
 
     private var connectionBannerColor: Color {
+        if isMeshtasticOnlyTransport {
+            return .purple
+        }
+
         if conversation.kind == .group {
             switch coordinator.transportState {
             case .internetDirectConnected, .internetBridgedConnected:
@@ -284,6 +313,10 @@ struct ChatView: View {
     }
 
     private var connectionBannerSymbolName: String {
+        if isMeshtasticOnlyTransport {
+            return "antenna.radiowaves.left.and.right"
+        }
+
         if conversation.kind == .group {
             switch coordinator.transportState {
             case .internetDirectConnected:
@@ -458,9 +491,26 @@ struct ChatView: View {
         VStack(spacing: 0) {
             Divider().overlay(PigeonTheme.divider)
             replyComposerBar
+            if isMeshtasticOnlyTransport {
+                meshtasticCharacterCounter
+            }
             messageInputBar
         }
         .background(PigeonTheme.surface)
+    }
+
+    private var meshtasticCharacterCounter: some View {
+        let used = draftText.trimmingCharacters(in: .whitespacesAndNewlines).utf8.count
+        let limit = MeshtasticConstants.maxDirectCiphertextSize
+        let overLimit = used > limit
+        return HStack {
+            Spacer()
+            Text("\(used)/\(limit)")
+                .font(PigeonTheme.monoFont)
+                .foregroundColor(overLimit ? PigeonTheme.error : PigeonTheme.textTertiary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 4)
     }
 
     private func dismissComposerKeyboard() {

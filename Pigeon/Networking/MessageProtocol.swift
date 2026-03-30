@@ -44,6 +44,7 @@ nonisolated struct PeerIdentityPayload: Codable, Hashable, Sendable {
     let isMeshNode: Bool?
     let relayReachable: Bool?
     let bridgeCapacityRemaining: Int?
+    let loraMode: String?
 }
 
 nonisolated struct PeerReachabilityPayload: Hashable, Sendable {

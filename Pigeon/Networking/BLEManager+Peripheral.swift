@@ -42,7 +42,8 @@ extension BLEManager: CBPeripheralManagerDelegate {
                 bridgeEnabled: bridgeEnabled,
                 isMeshNode: false,
                 relayReachable: bridgeRelayReachable,
-                bridgeCapacityRemaining: bridgeCapacityRemaining
+                bridgeCapacityRemaining: bridgeCapacityRemaining,
+                loraMode: nil
             )
 
             do {
