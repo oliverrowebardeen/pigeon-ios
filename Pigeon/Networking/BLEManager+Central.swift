@@ -300,13 +300,16 @@ extension BLEManager: CBPeripheralDelegate {
                 }
             }
 
+            if peer.isMeshNode {
+                meshNodeDeviceIDs.insert(peripheralID)
+            }
+
             // Send any pending messages for this peer
             sendPendingMessages(toPeerWithPublicKey: payload.publicKey, peripheralID: peripheralID)
 
             // Register with mesh nodes so they broadcast our pigeonID over LoRa
             // Wait for bridge control notification subscription to be confirmed first
             if peer.isMeshNode {
-                meshNodeDeviceIDs.insert(peripheralID)
                 if let bridgeChar = peripheralBridgeControlChars[peripheralID], bridgeChar.isNotifying {
                     registerWithMeshNode(peripheralID: peripheralID)
                 } else {
