@@ -23,6 +23,10 @@ actor MeshTopology {
         )
     }
 
+    func nodeReachability(for publicKey: Data) -> NodeReachability? {
+        graph[publicKey]
+    }
+
     func removeNode(_ publicKey: Data) {
         graph.removeValue(forKey: publicKey)
     }

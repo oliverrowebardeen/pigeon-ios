@@ -2117,11 +2117,9 @@ final class AppCoordinator {
         return "name.\(hash)"
     }
 
-    private func refreshBridgeCandidates() {
-        guard let relayClient else { return }
-
-        let candidates = nearbyPeers
-            .filter { $0.publicKey != identity.publicKey.rawRepresentation && !$0.isMeshNode && !$0.meshDiscovered }
+    private func currentBridgeCandidates() -> [BridgeCandidate] {
+        nearbyPeers
+            .filter { $0.publicKey != identity.publicKey.rawRepresentation && !$0.meshDiscovered }
             .map { peer in
                 BridgeCandidate(
                     publicKey: peer.publicKey,
@@ -2133,7 +2131,11 @@ final class AppCoordinator {
                     lastStatusAt: peer.lastSeen
                 )
             }
+    }
 
+    private func refreshBridgeCandidates() {
+        guard let relayClient else { return }
+        let candidates = currentBridgeCandidates()
         Task {
             await relayClient.updateBridgeCandidates(candidates)
         }
