@@ -33,6 +33,7 @@ nonisolated enum DirectConversationReachability: Sendable {
     case inRange
     case meshReachable
     case connectedToInternet
+    case meshGatewayAvailable
     case outOfRange
 }
 
@@ -725,6 +726,9 @@ final class AppCoordinator {
         case .internetDirectConnected, .internetBridgedConnected:
             return .connectedToInternet
         case .bleOnly, .internetDisconnected:
+            if nearbyPeers.contains(where: { $0.isMeshNode && $0.relayReachable }) {
+                return .meshGatewayAvailable
+            }
             return .outOfRange
         }
     }
