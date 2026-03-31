@@ -426,12 +426,9 @@ final class BLEManager: NSObject {
     // MARK: - Internal: Direct send
 
     private func attemptDirectSend(_ envelope: MessageEnvelope, to recipientPublicKey: Data) {
-        let recipientHex = recipientPublicKey.prefix(4).map { String(format: "%02x", $0) }.joined()
-
         if let peripheralID = peerPeripheralMap[recipientPublicKey],
            let peripheral = connectedPeripherals[peripheralID],
            let messageChar = peripheralMessageChars[peripheralID] {
-            print("[Pigeon BLE] Direct send to \(recipientHex) (peripheralID=\(peripheralID))")
             // Mesh nodes need the routing header so firmware can bridge to relay
             if isMeshNode(peripheralID: peripheralID) {
                 sendEnvelopeWithRoutingHeader(envelope, to: peripheral, characteristic: messageChar, recipientPublicKey: envelope.recipientPublicKey)
@@ -442,23 +439,14 @@ final class BLEManager: NSObject {
         }
 
         // Check all connected peers for potential forwarding
-        print("[Pigeon BLE] No direct connection to \(recipientHex), forwarding to \(connectedPeripherals.count) connected peers")
         for (peripheralID, peripheral) in connectedPeripherals {
             guard peripheralPeerMap[peripheralID] != recipientPublicKey,
                   let messageChar = peripheralMessageChars[peripheralID] else { continue }
 
-            let peerKey = peripheralPeerMap[peripheralID]
-            let peerHex = peerKey?.prefix(4).map { String(format: "%02x", $0) }.joined() ?? "unknown"
-            let meshNode = isMeshNode(peripheralID: peripheralID)
-            let peerIsMeshNode = peerKey.flatMap { nearbyPeers[$0]?.isMeshNode } ?? false
-            print("[Pigeon BLE] Forwarding to peer \(peerHex) (peripheralID=\(peripheralID), isMeshNode=\(meshNode), peerIsMeshNode=\(peerIsMeshNode), inMeshNodeDeviceIDs=\(meshNodeDeviceIDs.contains(peripheralID)))")
-
             // Mesh nodes get the routing header so they can bridge to internet
-            if meshNode {
-                print("[Pigeon BLE] → Sending WITH routing header to mesh node \(peerHex)")
+            if isMeshNode(peripheralID: peripheralID) {
                 sendEnvelopeWithRoutingHeader(envelope, to: peripheral, characteristic: messageChar, recipientPublicKey: recipientPublicKey)
             } else {
-                print("[Pigeon BLE] → Sending WITHOUT routing header to \(peerHex)")
                 sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
             }
         }

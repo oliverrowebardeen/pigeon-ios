@@ -1954,18 +1954,14 @@ final class AppCoordinator {
         _ envelope: MessageEnvelope,
         recipientPublicKey: Data
     ) async -> Bool {
-        let recipientHex = recipientPublicKey.prefix(4).map { String(format: "%02x", $0) }.joined()
-
         // 1. Peer is directly connected — send via BLE
         if isPeerNearby(publicKey: recipientPublicKey) {
-            print("[Pigeon Transport] Step 1: DIRECT BLE send to \(recipientHex)…")
             bleManager.sendMessage(envelope, to: recipientPublicKey)
             return false
         }
 
         // 2. Peer is mesh-reachable — send via mesh (mesh-first, skip relay)
         if meshReachabilityCache[recipientPublicKey] == true {
-            print("[Pigeon Transport] Step 2: MESH-REACHABLE send to \(recipientHex)…")
             bleManager.sendMessage(envelope, to: recipientPublicKey)
             return false
         }
@@ -1974,12 +1970,10 @@ final class AppCoordinator {
 
         // 3a. We have internet — send to relay directly
         if hasInternetConnectivity, let relayClient {
-            print("[Pigeon Transport] Step 3a: INTERNET RELAY send to \(recipientHex)…")
             do {
                 try await relayClient.sendEnvelope(envelope)
                 return true
             } catch {
-                print("[Pigeon Transport] Step 3a: relay send FAILED: \(error)")
                 // Relay failed, fall through to mesh attempts
             }
         }
@@ -2004,10 +1998,7 @@ final class AppCoordinator {
 
         // 4. No internet, no gateway — flood to mesh and hope
         if canAttemptBLEMeshDelivery(to: recipientPublicKey) {
-            print("[Pigeon Transport] Step 4: MESH FLOOD send to \(recipientHex)… (nearbyPeers=\(nearbyPeers.count))")
             bleManager.sendMessage(envelope, to: recipientPublicKey)
-        } else {
-            print("[Pigeon Transport] NO PATH AVAILABLE for \(recipientHex) — message will be queued")
         }
         return false
     }
