@@ -48,11 +48,7 @@ actor RelaySendSession {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             beginWaitingForAcceptance(messageID: messageID, continuation: continuation)
 
-            Task { [weak self] in
-                guard let self else {
-                    continuation.resume(throwing: RelaySendSessionError.notConnected)
-                    return
-                }
+            Task {
                 do {
                     try await self.sendFrame(type: "msg_send", reqID: messageID, payload: payload)
                 } catch {
