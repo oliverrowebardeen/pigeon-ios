@@ -31,7 +31,8 @@ Pigeon.local.xcconfig
 
 
 
-
 # CI/CD workflows
 .github/workflows/
 
+# Documentation (kept locally, not in public repo)
+docs/
