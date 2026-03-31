@@ -280,4 +280,43 @@ struct GroupInviteTests {
             token.isValidSignature(ownerSigningPublicKey: ownerSigning.publicKey.rawRepresentation)
         )
     }
+
+    @Test("Token with signing key but legacy signature is rejected")
+    func tokenWithSigningKeyButLegacySignatureIsRejected() {
+        let ownerAgreement = Curve25519.KeyAgreement.PrivateKey()
+        let attackerSigning = Curve25519.Signing.PrivateKey()
+        let inviter = Curve25519.KeyAgreement.PrivateKey()
+        let groupID = UUID()
+        let expiresAtMS = Int64((Date().addingTimeInterval(600)).timeIntervalSince1970 * 1000)
+        let nonce = UUID()
+
+        // Craft a token with attacker's signing key but a legacy SHA-256 "signature"
+        // (which anyone can compute from public fields)
+        var legacyPayload = Data(groupID.uuidString.utf8)
+        legacyPayload.append(Data("TestGroup".utf8))
+        legacyPayload.append(ownerAgreement.publicKey.rawRepresentation)
+        legacyPayload.append(inviter.publicKey.rawRepresentation)
+        var expires = expiresAtMS.bigEndian
+        withUnsafeBytes(of: &expires) { legacyPayload.append(contentsOf: $0) }
+        legacyPayload.append(Data(nonce.uuidString.utf8))
+        legacyPayload.append(ownerAgreement.publicKey.rawRepresentation)
+        let digest = SHA256.hash(data: legacyPayload)
+        let legacyHex = digest.map { String(format: "%02x", $0) }.joined()
+
+        let token = GroupInviteToken(
+            groupID: groupID,
+            groupName: "TestGroup",
+            ownerPublicKey: ownerAgreement.publicKey.rawRepresentation,
+            ownerSigningPublicKey: attackerSigning.publicKey.rawRepresentation,
+            inviterPublicKey: inviter.publicKey.rawRepresentation,
+            expiresAtMS: expiresAtMS,
+            nonce: nonce,
+            signatureHex: legacyHex
+        )
+
+        // Token claims a signing key but uses legacy signature — must be rejected
+        #expect(
+            !token.isValidSignature(ownerSigningPublicKey: attackerSigning.publicKey.rawRepresentation)
+        )
+    }
 }

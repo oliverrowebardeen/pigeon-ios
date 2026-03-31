@@ -129,6 +129,11 @@ nonisolated struct GroupInviteToken: Codable, Hashable, Sendable {
             }
         }
 
+        // If token claims to have a signing key, require Ed25519 — don't fall back to legacy
+        guard self.ownerSigningPublicKey == nil else {
+            return false
+        }
+
         return Self.legacySignature(
             groupID: groupID,
             groupName: groupName,
