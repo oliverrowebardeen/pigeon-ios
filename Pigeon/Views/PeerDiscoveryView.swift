@@ -367,7 +367,7 @@ struct MeshNodeDetailSheet: View {
         case "connecting": return "Connecting to WiFi..."
         case "wifi_connected": return "WiFi Connected"
         case "auth": return "Authenticating..."
-        case "offline": return "Relay Disconnected"
+        case "offline": return "WiFi Connected"
         case "no_wifi": return "Not Configured"
         case "ssid_not_found": return "Network Not Found"
         case "wrong_password": return "Wrong Password"
