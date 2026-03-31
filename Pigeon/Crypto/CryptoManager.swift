@@ -4,9 +4,16 @@ import Foundation
 nonisolated enum CryptoManagerError: Error {
     case invalidPeerPublicKey
     case invalidSenderPublicKey
+    case invalidSenderSigningPublicKey
     case invalidRecipient
     case invalidNonce
     case invalidMessageEncoding
+}
+
+nonisolated enum WirePayloadAuthenticationStatus: Sendable, Equatable {
+    case verified
+    case unsignedLegacy
+    case invalid
 }
 
 nonisolated struct CryptoManager: Sendable {
@@ -169,5 +176,59 @@ nonisolated struct CryptoManager: Sendable {
             throw CryptoManagerError.invalidMessageEncoding
         }
         return text
+    }
+
+    func signedPayload(
+        _ payload: WirePayloadV2,
+        senderSigningPrivateKey: Curve25519.Signing.PrivateKey
+    ) throws -> WirePayloadV2 {
+        let senderSigningPublicKey = senderSigningPrivateKey.publicKey.rawRepresentation
+        let signedContent = try payload.serializedForSigning(
+            senderSigningPublicKey: senderSigningPublicKey
+        )
+        let signature = try senderSigningPrivateKey.signature(for: signedContent)
+        return payload.withSenderAuthentication(
+            senderSigningPublicKey: senderSigningPublicKey,
+            signature: signature
+        )
+    }
+
+    func encodeSignedPayload(
+        _ payload: WirePayloadV2,
+        senderSigningPrivateKey: Curve25519.Signing.PrivateKey
+    ) throws -> Data {
+        let signedPayload = try signedPayload(
+            payload,
+            senderSigningPrivateKey: senderSigningPrivateKey
+        )
+        return try WirePayloadV2.makeWireEncoder().encode(signedPayload)
+    }
+
+    func verifyPayloadSignature(_ payload: WirePayloadV2) -> WirePayloadAuthenticationStatus {
+        switch (payload.signature, payload.senderSigningPublicKey) {
+        case (nil, nil):
+            return .unsignedLegacy
+        case (.some, nil), (nil, .some):
+            return .invalid
+        case let (.some(signature), .some(senderSigningPublicKey)):
+            let signingPublicKey: Curve25519.Signing.PublicKey
+
+            do {
+                signingPublicKey = try Curve25519.Signing.PublicKey(
+                    rawRepresentation: senderSigningPublicKey
+                )
+            } catch {
+                return .invalid
+            }
+
+            do {
+                let signedContent = try payload.serializedForSigning()
+                return signingPublicKey.isValidSignature(signature, for: signedContent)
+                    ? .verified
+                    : .invalid
+            } catch {
+                return .invalid
+            }
+        }
     }
 }

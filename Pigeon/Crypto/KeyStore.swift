@@ -13,7 +13,9 @@ nonisolated final class KeyStore: Sendable {
 
     private enum Account {
         static let identityPrivateKey = "identity.private-key"
+        static let identitySigningPrivateKey = "identity.signing-private-key"
         static let peerPrefix = "peer."
+        static let peerSigningPrefix = "peer-signing."
         static let groupPrefix = "group."
     }
 
@@ -29,6 +31,18 @@ nonisolated final class KeyStore: Sendable {
 
     func deleteIdentityPrivateKey() throws {
         try deleteData(account: Account.identityPrivateKey)
+    }
+
+    func saveIdentitySigningPrivateKey(_ privateKeyData: Data) throws {
+        try save(data: privateKeyData, account: Account.identitySigningPrivateKey)
+    }
+
+    func loadIdentitySigningPrivateKey() throws -> Data? {
+        try loadData(account: Account.identitySigningPrivateKey)
+    }
+
+    func deleteIdentitySigningPrivateKey() throws {
+        try deleteData(account: Account.identitySigningPrivateKey)
     }
 
     func saveKnownPeerPublicKey(_ publicKeyData: Data, pigeonID: String) throws {
@@ -47,6 +61,17 @@ nonisolated final class KeyStore: Sendable {
 
     func loadPeerKeyByPigeonID(pigeonID: String) throws -> Data? {
         try loadData(account: Account.peerPrefix + "pid." + pigeonID)
+    }
+
+    func savePeerSigningPublicKey(_ signingPublicKeyData: Data, identityPublicKey: Data) throws {
+        try save(
+            data: signingPublicKeyData,
+            account: Account.peerSigningPrefix + identityPublicKey.hexEncodedString
+        )
+    }
+
+    func loadPeerSigningPublicKey(identityPublicKey: Data) throws -> Data? {
+        try loadData(account: Account.peerSigningPrefix + identityPublicKey.hexEncodedString)
     }
 
     func loadKnownPeerPublicKeys() throws -> [String: Data] {

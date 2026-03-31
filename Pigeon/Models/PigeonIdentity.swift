@@ -5,8 +5,14 @@ nonisolated struct PigeonIdentity: Sendable {
     private static let displayNameDefaultsKey = "pigeon.identity.display-name"
 
     let privateKey: Curve25519.KeyAgreement.PrivateKey
+    let signingPrivateKey: Curve25519.Signing.PrivateKey
+
     var publicKey: Curve25519.KeyAgreement.PublicKey {
         privateKey.publicKey
+    }
+
+    var signingPublicKey: Data {
+        signingPrivateKey.publicKey.rawRepresentation
     }
 
     var pigeonID: String {
@@ -15,8 +21,13 @@ nonisolated struct PigeonIdentity: Sendable {
 
     var displayName: String?
 
-    init(privateKey: Curve25519.KeyAgreement.PrivateKey, displayName: String? = nil) {
+    init(
+        privateKey: Curve25519.KeyAgreement.PrivateKey,
+        signingPrivateKey: Curve25519.Signing.PrivateKey,
+        displayName: String? = nil
+    ) {
         self.privateKey = privateKey
+        self.signingPrivateKey = signingPrivateKey
         self.displayName = Self.normalizedDisplayName(displayName)
     }
 
@@ -28,12 +39,33 @@ nonisolated struct PigeonIdentity: Sendable {
 
         if let rawPrivateKey = try keyStore.loadIdentityPrivateKey() {
             let privateKey = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: rawPrivateKey)
-            return PigeonIdentity(privateKey: privateKey, displayName: displayName)
+            let signingPrivateKey: Curve25519.Signing.PrivateKey
+
+            if let rawSigningPrivateKey = try keyStore.loadIdentitySigningPrivateKey() {
+                signingPrivateKey = try Curve25519.Signing.PrivateKey(
+                    rawRepresentation: rawSigningPrivateKey
+                )
+            } else {
+                signingPrivateKey = Curve25519.Signing.PrivateKey()
+                try keyStore.saveIdentitySigningPrivateKey(signingPrivateKey.rawRepresentation)
+            }
+
+            return PigeonIdentity(
+                privateKey: privateKey,
+                signingPrivateKey: signingPrivateKey,
+                displayName: displayName
+            )
         }
 
         let privateKey = Curve25519.KeyAgreement.PrivateKey()
+        let signingPrivateKey = Curve25519.Signing.PrivateKey()
         try keyStore.saveIdentityPrivateKey(privateKey.rawRepresentation)
-        return PigeonIdentity(privateKey: privateKey, displayName: displayName)
+        try keyStore.saveIdentitySigningPrivateKey(signingPrivateKey.rawRepresentation)
+        return PigeonIdentity(
+            privateKey: privateKey,
+            signingPrivateKey: signingPrivateKey,
+            displayName: displayName
+        )
     }
 
     mutating func setDisplayName(_ newValue: String?, userDefaults: UserDefaults = .standard) {

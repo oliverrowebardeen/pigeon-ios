@@ -98,6 +98,18 @@ nonisolated struct DeliveryAckPayload: Codable, Hashable, Sendable {
 }
 
 nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
+    static func makeWireEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        return encoder
+    }
+
+    static func makeWireDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        return decoder
+    }
+
     let version: Int
     let eventType: WireEventType
     let logicalMessageID: UUID
@@ -105,6 +117,8 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
     let groupID: UUID?
     let senderPublicKey: Data
     let timestamp: Date
+    let senderSigningPublicKey: Data?
+    let signature: Data?
 
     let directText: DirectTextPayload?
     let directReadReceipt: DirectReadReceiptPayload?
@@ -121,6 +135,8 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
         groupID: UUID? = nil,
         senderPublicKey: Data,
         timestamp: Date = Date(),
+        senderSigningPublicKey: Data? = nil,
+        signature: Data? = nil,
         directText: DirectTextPayload? = nil,
         directReadReceipt: DirectReadReceiptPayload? = nil,
         directReaction: DirectReactionPayload? = nil,
@@ -136,6 +152,8 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
         self.groupID = groupID
         self.senderPublicKey = senderPublicKey
         self.timestamp = timestamp
+        self.senderSigningPublicKey = senderSigningPublicKey
+        self.signature = signature
         self.directText = directText
         self.directReadReceipt = directReadReceipt
         self.directReaction = directReaction
@@ -143,6 +161,52 @@ nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
         self.groupControl = groupControl
         self.groupEncrypted = groupEncrypted
         self.deliveryAck = deliveryAck
+    }
+
+    func unsignedSignaturePayload(senderSigningPublicKey override: Data? = nil) -> WirePayloadV2 {
+        WirePayloadV2(
+            eventType: eventType,
+            logicalMessageID: logicalMessageID,
+            conversationID: conversationID,
+            groupID: groupID,
+            senderPublicKey: senderPublicKey,
+            timestamp: timestamp,
+            senderSigningPublicKey: override ?? senderSigningPublicKey,
+            signature: nil,
+            directText: directText,
+            directReadReceipt: directReadReceipt,
+            directReaction: directReaction,
+            groupKeyShare: groupKeyShare,
+            groupControl: groupControl,
+            groupEncrypted: groupEncrypted,
+            deliveryAck: deliveryAck
+        )
+    }
+
+    func withSenderAuthentication(senderSigningPublicKey: Data, signature: Data) -> WirePayloadV2 {
+        WirePayloadV2(
+            eventType: eventType,
+            logicalMessageID: logicalMessageID,
+            conversationID: conversationID,
+            groupID: groupID,
+            senderPublicKey: senderPublicKey,
+            timestamp: timestamp,
+            senderSigningPublicKey: senderSigningPublicKey,
+            signature: signature,
+            directText: directText,
+            directReadReceipt: directReadReceipt,
+            directReaction: directReaction,
+            groupKeyShare: groupKeyShare,
+            groupControl: groupControl,
+            groupEncrypted: groupEncrypted,
+            deliveryAck: deliveryAck
+        )
+    }
+
+    func serializedForSigning(senderSigningPublicKey override: Data? = nil) throws -> Data {
+        try Self.makeWireEncoder().encode(
+            unsignedSignaturePayload(senderSigningPublicKey: override)
+        )
     }
 }
 
