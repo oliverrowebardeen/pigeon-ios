@@ -1996,16 +1996,10 @@ final class AppCoordinator {
         }
 
         // 3b. No internet but a gateway exists in the mesh — route toward it
-        // Send to recipientPublicKey (not gatewayHop) so BLEManager's forwarding
-        // loop adds the routing header that firmware's bridgeToRelay() requires.
         let directPeerKeys = nearbyPeers.map(\.publicKey)
         if let gatewayHop = await meshTopology.firstHopToGateway(from: directPeerKeys) {
-            let gwHex = gatewayHop.prefix(4).map { String(format: "%02x", $0) }.joined()
-            print("[Pigeon Transport] Step 3b: MESH GATEWAY send to \(recipientHex)… (gateway=\(gwHex))")
-            bleManager.sendMessage(envelope, to: recipientPublicKey)
+            bleManager.sendMessage(envelope, to: gatewayHop)
             return false
-        } else {
-            print("[Pigeon Transport] Step 3b: firstHopToGateway returned nil (directPeers=\(directPeerKeys.count), hasInternet=\(hasInternetConnectivity))")
         }
 
         // 4. No internet, no gateway — flood to mesh and hope
