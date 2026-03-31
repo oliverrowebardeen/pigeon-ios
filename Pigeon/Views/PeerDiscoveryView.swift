@@ -212,6 +212,13 @@ struct MeshNodeRowView: View {
             }
             .font(PigeonTheme.captionFont)
             .foregroundColor(.green)
+        } else if let state = node.bridgeState, MeshNodeDetailSheet.wifiErrorStates.contains(state) {
+            HStack(spacing: 2) {
+                Image(systemName: "wifi.exclamationmark")
+                Text("Error")
+            }
+            .font(PigeonTheme.captionFont)
+            .foregroundColor(.red)
         } else if node.bridgeState == "offline" {
             HStack(spacing: 2) {
                 Image(systemName: "wifi")
@@ -351,7 +358,15 @@ struct MeshNodeDetailSheet: View {
         .listRowBackground(PigeonTheme.surface)
     }
 
+    static let wifiErrorStates: Set<String> = [
+        "ssid_not_found", "wrong_password", "auth_expired",
+        "assoc_rejected", "conn_failed", "beacon_timeout"
+    ]
+
     private var bridgeStatusIcon: String {
+        if let state = liveNode.bridgeState, Self.wifiErrorStates.contains(state) {
+            return "wifi.exclamationmark"
+        }
         if liveNode.relayReachable { return "globe" }
         if liveNode.bridgeState == "offline" { return "wifi.exclamationmark" }
         if liveNode.bridgeEnabled { return "wifi" }
@@ -359,6 +374,9 @@ struct MeshNodeDetailSheet: View {
     }
 
     private var bridgeStatusColor: Color {
+        if let state = liveNode.bridgeState, Self.wifiErrorStates.contains(state) {
+            return .red
+        }
         if liveNode.relayReachable { return .green }
         if liveNode.bridgeState == "offline" { return .yellow }
         if liveNode.bridgeEnabled { return .orange }
@@ -369,9 +387,16 @@ struct MeshNodeDetailSheet: View {
         switch liveNode.bridgeState {
         case "online": return "Online"
         case "connecting": return "Connecting to WiFi..."
+        case "wifi_connected": return "WiFi Connected"
         case "auth": return "Authenticating..."
         case "offline": return "WiFi Connected"
         case "no_wifi": return "Not Configured"
+        case "ssid_not_found": return "Network Not Found"
+        case "wrong_password": return "Wrong Password"
+        case "auth_expired": return "Auth Expired"
+        case "assoc_rejected": return "Connection Rejected"
+        case "conn_failed": return "Connection Failed"
+        case "beacon_timeout": return "Network Timeout"
         default:
             // No bridge_status received yet — fall back to identity flags
             if liveNode.relayReachable { return "Online" }

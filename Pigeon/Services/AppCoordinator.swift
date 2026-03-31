@@ -33,6 +33,7 @@ nonisolated enum DirectConversationReachability: Sendable {
     case inRange
     case meshReachable
     case connectedToInternet
+    case meshGatewayAvailable
     case outOfRange
 }
 
@@ -847,6 +848,9 @@ final class AppCoordinator {
         case .internetDirectConnected, .internetBridgedConnected:
             return .connectedToInternet
         case .bleOnly, .internetDisconnected:
+            if nearbyPeers.contains(where: { $0.isMeshNode && $0.relayReachable }) {
+                return .meshGatewayAvailable
+            }
             return .outOfRange
         }
     }
@@ -2155,6 +2159,17 @@ final class AppCoordinator {
             }
         }
 
+        // 3a-alt. No direct internet — try bootstrapping a bridge through a mesh node
+        if !hasInternetConnectivity, let relayClient {
+            do {
+                await relayClient.updateBridgeCandidates(currentBridgeCandidates())
+                try await relayClient.sendEnvelopeBootstrappingBridgeIfNeeded(envelope)
+                return true
+            } catch {
+                // Bridge bootstrap failed, fall through to mesh attempts
+            }
+        }
+
         // 3b. No internet but a gateway exists in the mesh — route toward it
         let directPeerKeys = directlyConnectedPeerKeys
         if let gatewayHop = await meshTopology.firstHopToGateway(from: directPeerKeys) {
@@ -2318,10 +2333,8 @@ final class AppCoordinator {
         return "name.\(hash)"
     }
 
-    private func refreshBridgeCandidates() {
-        guard let relayClient else { return }
-
-        let candidates = nearbyPeers
+    private func currentBridgeCandidates() -> [BridgeCandidate] {
+        nearbyPeers
             .filter { $0.publicKey != identity.publicKey.rawRepresentation && !$0.isMeshNode && !$0.meshDiscovered }
             .map { peer in
                 BridgeCandidate(
@@ -2334,7 +2347,11 @@ final class AppCoordinator {
                     lastStatusAt: peer.lastSeen
                 )
             }
+    }
 
+    private func refreshBridgeCandidates() {
+        guard let relayClient else { return }
+        let candidates = currentBridgeCandidates()
         Task {
             await relayClient.updateBridgeCandidates(candidates)
         }
@@ -2744,6 +2761,17 @@ extension AppCoordinator: BLEManagerDelegate {
                 nearbyPeers[index].relayReachable = status.isOnline
                 nearbyPeers[index].bridgeEnabled = status.bridge != "no_wifi"
                 nearbyPeers[index].bridgeState = status.bridge
+                nearbyPeers[index].bridgeCapacityRemaining = status.capacityRemaining ?? nearbyPeers[index].bridgeCapacityRemaining
+
+                // Update mesh topology gateway flag so firstHopToGateway() finds this node
+                let existing = await meshTopology.nodeReachability(for: nodePublicKey)
+                await meshTopology.update(
+                    sender: nodePublicKey,
+                    reachablePeers: existing.map { Array($0.reachablePeers) } ?? [],
+                    hasInternetGateway: status.isOnline,
+                    timestamp: Date()
+                )
+                refreshBridgeCandidates()
             }
         }
     }

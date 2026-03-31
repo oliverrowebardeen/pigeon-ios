@@ -77,7 +77,7 @@ Every message is end-to-end encrypted before it leaves the sending device:
 - **Key agreement** — ECDH (Elliptic Curve Diffie-Hellman) with Curve25519 derives a shared secret between sender and recipient.
 - **Key derivation** — HKDF-SHA256 derives a 256-bit symmetric key from the shared secret.
 - **Encryption** — AES-256-GCM with a fresh random nonce per message. Provides authenticated encryption (confidentiality + integrity + authentication).
-- **Zero-knowledge relay** — The relay server only sees opaque ciphertext, sender/recipient public keys, and timestamps. It cannot decrypt content. Bridge phones similarly forward encrypted frames they cannot read.
+- **Sealed sender** — Messages use ephemeral Curve25519 keys so the relay server only sees the recipient's routing hash, an unlinkable ephemeral public key, and opaque ciphertext. It cannot identify the sender or decrypt content. Bridge phones similarly forward encrypted frames they cannot read.
 - **Group encryption** — Groups use symmetric key encryption with epoch-based rotation. When members are added or removed, the group key rotates and is redistributed to active members.
 
 ## Building
@@ -116,7 +116,7 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 ### Built and Working
 
 - BLE mesh messaging with multi-hop relay and deduplication
-- End-to-end encryption (Curve25519 + AES-256-GCM)
+- End-to-end encryption (Curve25519 + AES-256-GCM) with sealed sender
 - Internet relay transport with WebSocket and X25519 auth
 - Bridge mode (BLE-to-internet forwarding)
 - Meshtastic LoRa transport (stock Meshtastic BLE + Pigeon node meshtastic mode, compact binary envelopes)

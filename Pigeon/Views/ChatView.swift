@@ -281,6 +281,8 @@ struct ChatView: View {
                 return "Connected to Internet via Nearby Bridge"
             }
             return "Connected to Internet"
+        case .meshGatewayAvailable:
+            return "Connected via Mesh Bridge"
         case .outOfRange:
             return "Out of Range"
         }
@@ -305,7 +307,7 @@ struct ChatView: View {
             return PigeonTheme.success
         case .meshReachable:
             return PigeonTheme.accent
-        case .connectedToInternet:
+        case .connectedToInternet, .meshGatewayAvailable:
             return PigeonTheme.internet
         case .outOfRange:
             return PigeonTheme.error
@@ -337,6 +339,8 @@ struct ChatView: View {
             return coordinator.transportState == .internetBridgedConnected
                 ? "point.3.connected.trianglepath.dotted"
                 : "globe"
+        case .meshGatewayAvailable:
+            return "point.3.connected.trianglepath.dotted"
         case .outOfRange:
             return "wifi.slash"
         }
