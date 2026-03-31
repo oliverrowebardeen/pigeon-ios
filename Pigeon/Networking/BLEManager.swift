@@ -432,7 +432,12 @@ final class BLEManager: NSObject {
            let peripheral = connectedPeripherals[peripheralID],
            let messageChar = peripheralMessageChars[peripheralID] {
             print("[Pigeon BLE] Direct send to \(recipientHex) (peripheralID=\(peripheralID))")
-            sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
+            // Mesh nodes need the routing header so firmware can bridge to relay
+            if isMeshNode(peripheralID: peripheralID) {
+                sendEnvelopeWithRoutingHeader(envelope, to: peripheral, characteristic: messageChar, recipientPublicKey: envelope.recipientPublicKey)
+            } else {
+                sendEnvelope(envelope, to: peripheral, characteristic: messageChar)
+            }
             return
         }
 
