@@ -2149,7 +2149,7 @@ final class AppCoordinator {
 
     private func currentBridgeCandidates() -> [BridgeCandidate] {
         nearbyPeers
-            .filter { $0.publicKey != identity.publicKey.rawRepresentation && !$0.meshDiscovered }
+            .filter { $0.publicKey != identity.publicKey.rawRepresentation && !$0.isMeshNode && !$0.meshDiscovered }
             .map { peer in
                 BridgeCandidate(
                     publicKey: peer.publicKey,
