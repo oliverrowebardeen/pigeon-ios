@@ -1984,14 +1984,14 @@ final class AppCoordinator {
             }
         }
 
-        if let relayClient {
-            print("[Pigeon Transport] Step 3a-alt: BRIDGE BOOTSTRAP send to \(recipientHex)…")
+        // 3a-alt. No direct internet — try bootstrapping a bridge through a mesh node
+        if !hasInternetConnectivity, let relayClient {
             do {
                 await relayClient.updateBridgeCandidates(currentBridgeCandidates())
                 try await relayClient.sendEnvelopeBootstrappingBridgeIfNeeded(envelope)
                 return true
             } catch {
-                print("[Pigeon Transport] Step 3a-alt: bridge bootstrap FAILED: \(error)")
+                // Bridge bootstrap failed, fall through to mesh attempts
             }
         }
 
