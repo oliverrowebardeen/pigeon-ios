@@ -100,6 +100,7 @@ nonisolated struct DeliveryAckPayload: Codable, Hashable, Sendable {
 nonisolated struct WirePayloadV2: Codable, Hashable, Sendable {
     static func makeWireEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
         encoder.dateEncodingStrategy = .millisecondsSince1970
         return encoder
     }
