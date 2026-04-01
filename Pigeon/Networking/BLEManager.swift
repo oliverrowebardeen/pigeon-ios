@@ -1089,8 +1089,10 @@ final class BLEManager: NSObject {
             peripheralManager.updateValue(data, for: reachChar, onSubscribedCentrals: nil)
         }
 
-        // Write to connected peripherals (central role)
+        // Write to connected peripherals (central role), skip mesh nodes —
+        // reachability is BLE-local data, not useful over LoRa and saturates the radio.
         for (peripheralID, peripheral) in connectedPeripherals {
+            guard !isMeshNode(peripheralID: peripheralID) else { continue }
             if let reachChar = peripheralReachabilityChars[peripheralID] {
                 peripheral.writeValue(data, for: reachChar, type: .withResponse)
             }
@@ -1116,9 +1118,10 @@ final class BLEManager: NSObject {
         forwarded.hopCount += 1
         guard let forwardedData = try? MessageProtocol.encodeReachability(forwarded) else { return }
 
-        // Forward to connected peripherals (central role), except source
+        // Forward to connected peripherals (central role), except source and mesh nodes
         for (peripheralID, peripheral) in connectedPeripherals {
             if peripheralID == senderPeripheralID { continue }
+            guard !isMeshNode(peripheralID: peripheralID) else { continue }
             if let reachChar = peripheralReachabilityChars[peripheralID] {
                 peripheral.writeValue(forwardedData, for: reachChar, type: .withResponse)
             }
