@@ -223,6 +223,8 @@ final class AppCoordinator {
     func switchLoRaMode(_ mode: String, forMeshNode peer: Peer) {
         guard let peripheralID = bleManager.peripheralID(forPeerPublicKey: peer.publicKey) else { return }
         bleManager.sendLoRaModeSwitch(mode, toMeshNode: peripheralID)
+        // No post-write refresh needed: node reboots after mode switch,
+        // dropping the BLE connection. User reconnects manually.
     }
 
     // MARK: - Messaging
