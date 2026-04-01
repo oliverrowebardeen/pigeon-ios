@@ -335,6 +335,19 @@ final class BLEManager: NSObject {
         }
     }
 
+    func sendLoRaModeSwitch(_ mode: String, toMeshNode peripheralID: UUID) {
+        bleQueue.async { [weak self] in
+            guard let self,
+                  let peripheral = connectedPeripherals[peripheralID],
+                  let bridgeChar = peripheralBridgeControlChars[peripheralID] else { return }
+
+            let command: [String: String] = ["lora_mode": mode]
+            guard let data = try? JSONSerialization.data(withJSONObject: command) else { return }
+            peripheral.writeValue(data, for: bridgeChar, type: .withResponse)
+            debugLog("[Pigeon] Sent lora_mode switch to '\(mode)' on mesh node \(peripheralID)")
+        }
+    }
+
     func refreshPeerIdentity(peripheralID: UUID) {
         bleQueue.async { [weak self] in
             guard let self,
