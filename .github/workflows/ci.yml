@@ -9,14 +9,14 @@ on:
 jobs:
   build-and-test:
     name: Build & Test
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Build
-        run: xcodebuild -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 15 Pro' build
+        run: xcodebuild -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 
       - name: Test
-        run: xcodebuild -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 15 Pro' test
+        run: xcodebuild -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
