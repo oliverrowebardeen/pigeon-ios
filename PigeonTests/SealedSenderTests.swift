@@ -6,17 +6,8 @@ import Testing
 @Suite("Sealed Sender")
 struct SealedSenderTests {
 
-    private static let wireEncoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .millisecondsSince1970
-        return encoder
-    }()
-
-    private static let wireDecoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .millisecondsSince1970
-        return decoder
-    }()
+    private static let wireEncoder = WirePayloadV2.makeWireEncoder()
+    private static let wireDecoder = WirePayloadV2.makeWireDecoder()
 
     @Test("DeliveryAckPayload round-trips through JSON")
     func deliveryAckPayloadRoundTrip() throws {
@@ -176,5 +167,156 @@ struct SealedSenderTests {
         // Sender identity from both envelope and payload match (old-style)
         #expect(decoded.senderPublicKey == sender.publicKey.rawRepresentation)
         #expect(decoded.directText?.text == "legacy message")
+    }
+
+    @Test("Signed sealed sender message verifies after decryption")
+    func signedSealedSenderMessageVerifies() throws {
+        let crypto = CryptoManager()
+        let senderAgreement = Curve25519.KeyAgreement.PrivateKey()
+        let senderSigning = Curve25519.Signing.PrivateKey()
+        let recipient = Curve25519.KeyAgreement.PrivateKey()
+
+        let payload = WirePayloadV2(
+            eventType: .directText,
+            logicalMessageID: UUID(),
+            senderPublicKey: senderAgreement.publicKey.rawRepresentation,
+            directText: DirectTextPayload(text: "signed hello", reply: nil)
+        )
+        let payloadData = try crypto.encodeSignedPayload(
+            payload,
+            senderSigningPrivateKey: senderSigning
+        )
+
+        let envelope = try crypto.encryptSealed(
+            plaintext: payloadData,
+            recipientPublicKeyData: recipient.publicKey.rawRepresentation
+        )
+
+        let decrypted = try crypto.decrypt(envelope: envelope, recipientPrivateKey: recipient)
+        let decoded = try Self.wireDecoder.decode(WirePayloadV2.self, from: decrypted)
+
+        #expect(decoded.senderSigningPublicKey == senderSigning.publicKey.rawRepresentation)
+        #expect(decoded.signature?.count == 64)
+        #expect(crypto.verifyPayloadSignature(decoded) == .verified)
+    }
+
+    @Test("Tampered message signature is rejected")
+    func tamperedMessageSignatureIsRejected() throws {
+        let crypto = CryptoManager()
+        let senderAgreement = Curve25519.KeyAgreement.PrivateKey()
+        let senderSigning = Curve25519.Signing.PrivateKey()
+
+        let payload = WirePayloadV2(
+            eventType: .directText,
+            logicalMessageID: UUID(),
+            senderPublicKey: senderAgreement.publicKey.rawRepresentation,
+            directText: DirectTextPayload(text: "tamper me", reply: nil)
+        )
+        let payloadData = try crypto.encodeSignedPayload(
+            payload,
+            senderSigningPrivateKey: senderSigning
+        )
+        let signedPayload = try Self.wireDecoder.decode(WirePayloadV2.self, from: payloadData)
+
+        var signature = try #require(signedPayload.signature)
+        signature[signature.startIndex] ^= 0x01
+
+        let tamperedPayload = signedPayload.withSenderAuthentication(
+            senderSigningPublicKey: try #require(signedPayload.senderSigningPublicKey),
+            signature: signature
+        )
+
+        #expect(crypto.verifyPayloadSignature(tamperedPayload) == .invalid)
+    }
+
+    @Test("Unsigned legacy payload is still accepted")
+    func unsignedLegacyPayloadIsAccepted() {
+        let crypto = CryptoManager()
+        let sender = Curve25519.KeyAgreement.PrivateKey()
+        let payload = WirePayloadV2(
+            eventType: .directText,
+            logicalMessageID: UUID(),
+            senderPublicKey: sender.publicKey.rawRepresentation,
+            directText: DirectTextPayload(text: "legacy unsigned", reply: nil)
+        )
+
+        #expect(crypto.verifyPayloadSignature(payload) == .unsignedLegacy)
+    }
+}
+
+@Suite("Group Invite")
+struct GroupInviteTests {
+    @Test("Group invite Ed25519 signature verifies")
+    func ed25519InviteSignatureVerifies() throws {
+        let ownerAgreement = Curve25519.KeyAgreement.PrivateKey()
+        let ownerSigning = Curve25519.Signing.PrivateKey()
+        let inviter = Curve25519.KeyAgreement.PrivateKey()
+        let groupID = UUID()
+        let expiresAtMS = Int64((Date().addingTimeInterval(600)).timeIntervalSince1970 * 1000)
+        let nonce = UUID()
+
+        let signature = try GroupInviteToken.sign(
+            groupID: groupID,
+            groupName: "Pigeon",
+            ownerPublicKey: ownerAgreement.publicKey.rawRepresentation,
+            inviterPublicKey: inviter.publicKey.rawRepresentation,
+            expiresAtMS: expiresAtMS,
+            nonce: nonce,
+            ownerSigningPrivateKey: ownerSigning
+        )
+
+        let token = GroupInviteToken(
+            groupID: groupID,
+            groupName: "Pigeon",
+            ownerPublicKey: ownerAgreement.publicKey.rawRepresentation,
+            ownerSigningPublicKey: ownerSigning.publicKey.rawRepresentation,
+            inviterPublicKey: inviter.publicKey.rawRepresentation,
+            expiresAtMS: expiresAtMS,
+            nonce: nonce,
+            signatureHex: signature
+        )
+
+        #expect(
+            token.isValidSignature(ownerSigningPublicKey: ownerSigning.publicKey.rawRepresentation)
+        )
+    }
+
+    @Test("Token with signing key but legacy signature is rejected")
+    func tokenWithSigningKeyButLegacySignatureIsRejected() {
+        let ownerAgreement = Curve25519.KeyAgreement.PrivateKey()
+        let attackerSigning = Curve25519.Signing.PrivateKey()
+        let inviter = Curve25519.KeyAgreement.PrivateKey()
+        let groupID = UUID()
+        let expiresAtMS = Int64((Date().addingTimeInterval(600)).timeIntervalSince1970 * 1000)
+        let nonce = UUID()
+
+        // Craft a token with attacker's signing key but a legacy SHA-256 "signature"
+        // (which anyone can compute from public fields)
+        var legacyPayload = Data(groupID.uuidString.utf8)
+        legacyPayload.append(Data("TestGroup".utf8))
+        legacyPayload.append(ownerAgreement.publicKey.rawRepresentation)
+        legacyPayload.append(inviter.publicKey.rawRepresentation)
+        var expires = expiresAtMS.bigEndian
+        withUnsafeBytes(of: &expires) { legacyPayload.append(contentsOf: $0) }
+        legacyPayload.append(Data(nonce.uuidString.utf8))
+        legacyPayload.append(ownerAgreement.publicKey.rawRepresentation)
+        let digest = SHA256.hash(data: legacyPayload)
+        let legacyHex = digest.map { String(format: "%02x", $0) }.joined()
+
+        let token = GroupInviteToken(
+            groupID: groupID,
+            groupName: "TestGroup",
+            ownerPublicKey: ownerAgreement.publicKey.rawRepresentation,
+            ownerSigningPublicKey: attackerSigning.publicKey.rawRepresentation,
+            inviterPublicKey: inviter.publicKey.rawRepresentation,
+            expiresAtMS: expiresAtMS,
+            nonce: nonce,
+            signatureHex: legacyHex
+        )
+
+        // Token claims a signing key but uses legacy signature — must be rejected
+        #expect(
+            !token.isValidSignature(ownerSigningPublicKey: attackerSigning.publicKey.rawRepresentation)
+        )
     }
 }

@@ -31,7 +31,3 @@ Pigeon.local.xcconfig
 
 
 
-
-# CI/CD workflows
-.github/workflows/
-

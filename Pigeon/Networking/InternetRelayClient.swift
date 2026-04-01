@@ -26,6 +26,7 @@ nonisolated protocol InternetRelayClientDelegate: AnyObject {
 actor InternetRelayClient {
     private let relayURL: URL
     private let session: RelaySessionActor
+    private let sendSession: RelaySendSession
     private let reconnectDelayNanoseconds: UInt64 = 3_000_000_000
     private let bridgeSwitchHysteresisSeconds: TimeInterval = 10
     private let sendBridgeFrame: @Sendable (Data, BridgeControlFrame) async throws -> Void
@@ -54,6 +55,7 @@ actor InternetRelayClient {
     ) {
         self.relayURL = relayURL
         self.session = RelaySessionActor(identity: identity)
+        self.sendSession = RelaySendSession(relayURL: relayURL)
         self.bridgeFallbackEnabled = bridgeFallbackEnabled
         self.sendBridgeFrame = sendBridgeFrame
     }
@@ -86,6 +88,7 @@ actor InternetRelayClient {
             await transport.stop()
         }
         await session.disconnect(notify: false)
+        await sendSession.disconnect()
         activeBridge = nil
         selectedBridge = nil
         await updateState(.internetDisconnected, activeBridge: nil)
@@ -168,11 +171,21 @@ actor InternetRelayClient {
     }
 
     func sendEnvelope(_ envelope: MessageEnvelope) async throws {
-        try await session.sendEnvelope(envelope)
+        if currentState == .internetDirectConnected {
+            // Sealed sender: use anonymous send session (no identity on wire)
+            try await sendSession.sendEnvelope(envelope)
+        } else {
+            // Bridge mode: legacy single-connection send (until bridge dual-tunnel support)
+            try await session.sendEnvelope(envelope)
+        }
     }
 
     func sendEnvelopeBootstrappingBridgeIfNeeded(_ envelope: MessageEnvelope) async throws {
-        if currentState == .internetDirectConnected || currentState == .internetBridgedConnected {
+        if currentState == .internetDirectConnected {
+            try await sendSession.sendEnvelope(envelope)
+            return
+        }
+        if currentState == .internetBridgedConnected {
             try await session.sendEnvelope(envelope)
             return
         }
@@ -183,11 +196,13 @@ actor InternetRelayClient {
 
         try await connectPreferredPath(forceDirectRetry: false)
 
-        guard currentState == .internetBridgedConnected || currentState == .internetDirectConnected else {
+        if currentState == .internetDirectConnected {
+            try await sendSession.sendEnvelope(envelope)
+        } else if currentState == .internetBridgedConnected {
+            try await session.sendEnvelope(envelope)
+        } else {
             throw RelaySessionActorError.notConnected
         }
-
-        try await session.sendEnvelope(envelope)
     }
 
     private func connectPreferredPath(forceDirectRetry: Bool) async {

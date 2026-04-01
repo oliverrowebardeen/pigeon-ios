@@ -55,17 +55,8 @@ final class AppCoordinator {
     private static let internetBridgeEnabledDefaultsKey = "pigeon.settings.internetBridgeEnabled"
     private static let legacyMeshRelayDefaultsKey = "pigeon.settings.meshRelay"
 
-    private static let wireEncoder: JSONEncoder = {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .millisecondsSince1970
-        return encoder
-    }()
-
-    private static let wireDecoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .millisecondsSince1970
-        return decoder
-    }()
+    private static let wireEncoder = WirePayloadV2.makeWireEncoder()
+    private static let wireDecoder = WirePayloadV2.makeWireDecoder()
 
     var identity: PigeonIdentity
     let store: PigeonStore
@@ -216,11 +207,11 @@ final class AppCoordinator {
         wifiRefreshTask?.cancel()
         wifiRefreshTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled, self != nil else { return }
-            bleManager.refreshPeerIdentity(peripheralID: peripheralID)
+            guard !Task.isCancelled, let self else { return }
+            self.bleManager.refreshPeerIdentity(peripheralID: peripheralID)
             try? await Task.sleep(for: .seconds(10))
-            guard !Task.isCancelled, self != nil else { return }
-            bleManager.refreshPeerIdentity(peripheralID: peripheralID)
+            guard !Task.isCancelled else { return }
+            self.bleManager.refreshPeerIdentity(peripheralID: peripheralID)
         }
     }
 
@@ -960,21 +951,27 @@ final class AppCoordinator {
             throw AppCoordinatorError.groupNotFound
         }
 
+        guard group.ownerPublicKey == identity.publicKey.rawRepresentation else {
+            throw AppCoordinatorError.notGroupOwner
+        }
+
         let expiresAtMS = Int64((Date().addingTimeInterval(10 * 60)).timeIntervalSince1970 * 1000)
         let nonce = UUID()
-        let signature = GroupInviteToken.sign(
+        let signature = try GroupInviteToken.sign(
             groupID: group.id,
             groupName: group.name,
             ownerPublicKey: group.ownerPublicKey,
             inviterPublicKey: identity.publicKey.rawRepresentation,
             expiresAtMS: expiresAtMS,
-            nonce: nonce
+            nonce: nonce,
+            ownerSigningPrivateKey: identity.signingPrivateKey
         )
 
         let token = GroupInviteToken(
             groupID: group.id,
             groupName: group.name,
             ownerPublicKey: group.ownerPublicKey,
+            ownerSigningPublicKey: identity.signingPublicKey,
             inviterPublicKey: identity.publicKey.rawRepresentation,
             expiresAtMS: expiresAtMS,
             nonce: nonce,
@@ -1169,7 +1166,18 @@ final class AppCoordinator {
         }
 
         let token = try Self.wireDecoder.decode(GroupInviteToken.self, from: data)
-        guard token.isValidSignature(), !token.isExpired() else {
+        guard token.isValidSignature(ownerSigningPublicKey: token.ownerSigningPublicKey),
+              !token.isExpired()
+        else {
+            throw AppCoordinatorError.invalidWirePayload
+        }
+
+        if let ownerSigningPublicKey = token.ownerSigningPublicKey,
+           !validateOrPinPeerSigningPublicKey(
+                ownerSigningPublicKey,
+                for: token.ownerPublicKey,
+                context: "group invite owner"
+           ) {
             throw AppCoordinatorError.invalidWirePayload
         }
 
@@ -1273,7 +1281,7 @@ final class AppCoordinator {
                 senderPublicKey: identity.publicKey.rawRepresentation,
                 directText: DirectTextPayload(text: text, reply: replyMetadata)
             )
-            let payloadData = try Self.wireEncoder.encode(payload)
+            let payloadData = try encodeSignedWirePayload(payload)
 
             let envelope = try crypto.encryptSealed(
                 plaintext: payloadData,
@@ -1496,16 +1504,7 @@ final class AppCoordinator {
         do {
             let decrypted = try crypto.decrypt(envelope: envelope, recipientPrivateKey: identity.privateKey)
             let payload = try Self.wireDecoder.decode(WirePayloadV2.self, from: decrypted)
-
-            // Sealed sender: real sender identity comes from the decrypted payload,
-            // not the envelope header (which may contain an ephemeral key).
-            let senderPublicKey = payload.senderPublicKey
-
-            guard peerKeyChangeWarnings[senderPublicKey] == nil else {
-                return
-            }
-
-            try await applyIncomingPayload(payload, source: source)
+            try await handleDecodedIncomingPayload(payload, source: source)
 
             // BLE transport-layer ACK (not delivery receipt)
             if source == .ble {
@@ -1516,7 +1515,7 @@ final class AppCoordinator {
             if source == .relay {
                 await sendClientSideDeliveryAck(
                     for: payload.logicalMessageID,
-                    to: senderPublicKey
+                    to: payload.senderPublicKey
                 )
             }
         } catch {
@@ -1525,7 +1524,48 @@ final class AppCoordinator {
 
     }
 
-    private func applyIncomingPayload(_ payload: WirePayloadV2, source: InboundSource) async throws {
+    private func handleDecodedIncomingPayload(
+        _ payload: WirePayloadV2,
+        source: InboundSource
+    ) async throws {
+        let authenticationStatus = authenticateIncomingPayload(payload)
+
+        switch authenticationStatus {
+        case .verified:
+            break
+        case .unsignedLegacy:
+            securityLog(
+                "Accepted unsigned legacy message \(payload.logicalMessageID.uuidString.lowercased()) " +
+                "from \(PigeonIdentity.makePigeonID(fromPublicKeyData: payload.senderPublicKey))"
+            )
+        case .invalid:
+            securityLog(
+                "Dropped message \(payload.logicalMessageID.uuidString.lowercased()) with invalid signature " +
+                "from \(PigeonIdentity.makePigeonID(fromPublicKeyData: payload.senderPublicKey))"
+            )
+            return
+        }
+
+        // Sealed sender: real sender identity comes from the decrypted payload,
+        // not the envelope header (which may contain an ephemeral key).
+        let senderPublicKey = payload.senderPublicKey
+
+        guard peerKeyChangeWarnings[senderPublicKey] == nil else {
+            return
+        }
+
+        try await applyIncomingPayload(
+            payload,
+            source: source,
+            authenticationStatus: authenticationStatus
+        )
+    }
+
+    private func applyIncomingPayload(
+        _ payload: WirePayloadV2,
+        source: InboundSource,
+        authenticationStatus: WirePayloadAuthenticationStatus
+    ) async throws {
         switch payload.eventType {
         case .directText:
             try handleIncomingDirectText(payload, source: source)
@@ -1534,7 +1574,7 @@ final class AppCoordinator {
         case .directReaction:
             try handleIncomingDirectReaction(payload)
         case .groupKeyShare:
-            try handleIncomingGroupKeyShare(payload)
+            try handleIncomingGroupKeyShare(payload, authenticationStatus: authenticationStatus)
         case .groupControl:
             try handleIncomingGroupControl(payload)
         case .groupMessage:
@@ -1659,7 +1699,10 @@ final class AppCoordinator {
         }
     }
 
-    private func handleIncomingGroupKeyShare(_ payload: WirePayloadV2) throws {
+    private func handleIncomingGroupKeyShare(
+        _ payload: WirePayloadV2,
+        authenticationStatus: WirePayloadAuthenticationStatus
+    ) throws {
         guard let keyShare = payload.groupKeyShare,
               let keyData = Data(base64Encoded: keyShare.keyB64)
         else {
@@ -1667,10 +1710,40 @@ final class AppCoordinator {
         }
 
         let existing = try store.fetchGroup(id: keyShare.groupID)
+        let trustedOwnerPublicKey: Data
+
+        switch authenticationStatus {
+        case .verified:
+            guard payload.senderPublicKey == keyShare.ownerPublicKey else {
+                securityLog(
+                    "Dropped signed group key share for \(keyShare.groupID.uuidString.lowercased()) " +
+                    "because sender did not match claimed owner"
+                )
+                return
+            }
+
+            if let existing, existing.ownerPublicKey != payload.senderPublicKey {
+                securityLog(
+                    "Dropped signed group key share for \(keyShare.groupID.uuidString.lowercased()) " +
+                    "from non-owner sender \(PigeonIdentity.makePigeonID(fromPublicKeyData: payload.senderPublicKey))"
+                )
+                return
+            }
+
+            trustedOwnerPublicKey = payload.senderPublicKey
+        case .unsignedLegacy:
+            securityLog(
+                "Accepted unsigned legacy group key share for \(keyShare.groupID.uuidString.lowercased())"
+            )
+            trustedOwnerPublicKey = existing?.ownerPublicKey ?? keyShare.ownerPublicKey
+        case .invalid:
+            return
+        }
+
         let group = Group(
             id: keyShare.groupID,
             name: keyShare.groupName,
-            ownerPublicKey: keyShare.ownerPublicKey,
+            ownerPublicKey: trustedOwnerPublicKey,
             activeEpoch: keyShare.epoch,
             createdAt: existing?.createdAt ?? Date(),
             updatedAt: Date()
@@ -1679,14 +1752,14 @@ final class AppCoordinator {
         try store.saveGroup(group)
         try keyStore.saveGroupSymmetricKey(keyData, groupID: keyShare.groupID, epoch: keyShare.epoch)
 
-        for memberKey in Set(keyShare.members + [keyShare.ownerPublicKey]) {
+        for memberKey in Set(keyShare.members + [trustedOwnerPublicKey]) {
             let peer = nearbyPeers.first(where: { $0.publicKey == memberKey })
             let member = GroupMember(
                 groupID: keyShare.groupID,
                 publicKey: memberKey,
                 displayName: peer?.displayName,
                 pigeonID: peer?.pigeonID ?? PigeonIdentity.makePigeonID(fromPublicKeyData: memberKey),
-                role: memberKey == keyShare.ownerPublicKey ? .owner : .member,
+                role: memberKey == trustedOwnerPublicKey ? .owner : .member,
                 isActive: true,
                 joinedAt: Date(),
                 updatedAt: Date()
@@ -1987,14 +2060,13 @@ final class AppCoordinator {
 
         // Meshtastic-only path: single group broadcast instead of N pairwise envelopes
         let transport = groupTransport()
+        let payloadData = try encodeSignedWirePayload(payload)
         if transport == .pigeonMeshtasticMesh {
-            return try sendGroupPayloadViaPigeonMeshtastic(payload, groupID: groupID)
+            return try sendGroupPayloadViaPigeonMeshtastic(payloadData, groupID: groupID)
         }
         if transport == .meshtasticMesh && !hasInternetConnectivity {
-            return try sendGroupPayloadViaMeshtastic(payload, groupID: groupID)
+            return try sendGroupPayloadViaMeshtastic(payloadData, groupID: groupID)
         }
-
-        let payloadData = try Self.wireEncoder.encode(payload)
 
         // Pre-encrypt envelopes for each member (sync, fast)
         var envelopes: [(key: Data, envelope: MessageEnvelope)] = []
@@ -2037,13 +2109,12 @@ final class AppCoordinator {
     /// Uses group AES-GCM key directly — all group members can decrypt.
     /// Sends a group broadcast via a Pigeon mesh node in meshtastic mode.
     /// The node passes the CompactEnvelope raw to Meshtastic LoRa.
-    private func sendGroupPayloadViaPigeonMeshtastic(_ payload: WirePayloadV2, groupID: UUID) throws -> Bool {
+    private func sendGroupPayloadViaPigeonMeshtastic(_ payloadData: Data, groupID: UUID) throws -> Bool {
         guard let group = try store.fetchGroup(id: groupID),
               let groupKey = try keyStore.loadGroupSymmetricKey(groupID: groupID, epoch: group.activeEpoch) else {
             throw AppCoordinatorError.missingGroupKey
         }
 
-        let payloadData = try Self.wireEncoder.encode(payload)
         let sealed = try groupCrypto.encrypt(payloadData, keyData: groupKey)
         let compactData = CompactEnvelopeCodec.encodeGroupBroadcastEnvelope(
             sealed: sealed,
@@ -2061,13 +2132,12 @@ final class AppCoordinator {
         return true
     }
 
-    private func sendGroupPayloadViaMeshtastic(_ payload: WirePayloadV2, groupID: UUID) throws -> Bool {
+    private func sendGroupPayloadViaMeshtastic(_ payloadData: Data, groupID: UUID) throws -> Bool {
         guard let group = try store.fetchGroup(id: groupID),
               let groupKey = try keyStore.loadGroupSymmetricKey(groupID: groupID, epoch: group.activeEpoch) else {
             throw AppCoordinatorError.missingGroupKey
         }
 
-        let payloadData = try Self.wireEncoder.encode(payload)
         let sealed = try groupCrypto.encrypt(payloadData, keyData: groupKey)
         let compactData = CompactEnvelopeCodec.encodeGroupBroadcastEnvelope(
             sealed: sealed,
@@ -2084,7 +2154,7 @@ final class AppCoordinator {
     }
 
     private func sendWirePayload(_ payload: WirePayloadV2, to recipientPublicKey: Data) async throws {
-        let payloadData = try Self.wireEncoder.encode(payload)
+        let payloadData = try encodeSignedWirePayload(payload)
         let envelope = try crypto.encryptSealed(
             plaintext: payloadData,
             recipientPublicKeyData: recipientPublicKey,
@@ -2252,6 +2322,69 @@ final class AppCoordinator {
     private func decryptGroupInner(_ encrypted: GroupEncryptedPayload, keyData: Data) throws -> GroupInnerPayload {
         let plaintext = try encrypted.decrypt(using: groupCrypto, keyData: keyData)
         return try Self.wireDecoder.decode(GroupInnerPayload.self, from: plaintext)
+    }
+
+    private func securityLog(_ message: @autoclosure () -> String) {
+        print("[Pigeon][Security] \(message())")
+    }
+
+    private func encodeSignedWirePayload(_ payload: WirePayloadV2) throws -> Data {
+        try crypto.encodeSignedPayload(
+            payload,
+            senderSigningPrivateKey: identity.signingPrivateKey
+        )
+    }
+
+    private func validateOrPinPeerSigningPublicKey(
+        _ signingPublicKey: Data,
+        for identityPublicKey: Data,
+        context: String
+    ) -> Bool {
+        do {
+            if let pinnedSigningPublicKey = try keyStore.loadPeerSigningPublicKey(
+                identityPublicKey: identityPublicKey
+            ) {
+                if pinnedSigningPublicKey != signingPublicKey {
+                    securityLog(
+                        "\(context) signing key mismatch for " +
+                        "\(PigeonIdentity.makePigeonID(fromPublicKeyData: identityPublicKey))"
+                    )
+                    return false
+                }
+                return true
+            }
+
+            try keyStore.savePeerSigningPublicKey(
+                signingPublicKey,
+                identityPublicKey: identityPublicKey
+            )
+            return true
+        } catch {
+            securityLog(
+                "Could not persist signing key for \(context) " +
+                "\(PigeonIdentity.makePigeonID(fromPublicKeyData: identityPublicKey)): " +
+                "\(error.localizedDescription)"
+            )
+            return true
+        }
+    }
+
+    private func authenticateIncomingPayload(_ payload: WirePayloadV2) -> WirePayloadAuthenticationStatus {
+        let authenticationStatus = crypto.verifyPayloadSignature(payload)
+
+        guard authenticationStatus == .verified else {
+            return authenticationStatus
+        }
+
+        guard let senderSigningPublicKey = payload.senderSigningPublicKey else {
+            return .invalid
+        }
+
+        return validateOrPinPeerSigningPublicKey(
+            senderSigningPublicKey,
+            for: payload.senderPublicKey,
+            context: "message sender"
+        ) ? .verified : .invalid
     }
 
     private func makeReplyMetadata(from message: Message?) -> ReplyMetadataPayload? {
@@ -2478,7 +2611,7 @@ final class AppCoordinator {
                 timestamp: message.timestamp,
                 directText: DirectTextPayload(text: message.plaintext, reply: message.replyMetadata)
             )
-            let payloadData = try Self.wireEncoder.encode(payload)
+            let payloadData = try encodeSignedWirePayload(payload)
 
             let envelope = try crypto.encryptSealed(
                 plaintext: payloadData,
@@ -2785,7 +2918,7 @@ extension AppCoordinator: BLEManagerDelegate {
                 }
                 let plaintext = try groupCrypto.decrypt(sealed, keyData: keyData)
                 let payload = try Self.wireDecoder.decode(WirePayloadV2.self, from: plaintext)
-                try await applyIncomingPayload(payload, source: .ble)
+                try await handleDecodedIncomingPayload(payload, source: .ble)
             } catch {
                 debugLog("[Pigeon] Failed to decode compact group envelope from BLE: \(error)")
             }
@@ -2900,7 +3033,7 @@ extension AppCoordinator: MeshtasticBLEManagerDelegate {
                     // Decrypt with group symmetric key → WirePayloadV2
                     let plaintext = try groupCrypto.decrypt(sealed, keyData: keyData)
                     let payload = try Self.wireDecoder.decode(WirePayloadV2.self, from: plaintext)
-                    try await applyIncomingPayload(payload, source: .ble)
+                    try await handleDecodedIncomingPayload(payload, source: .ble)
                 } catch {
                     debugLog("[Meshtastic] Failed to decode group envelope: \(error)")
                 }
