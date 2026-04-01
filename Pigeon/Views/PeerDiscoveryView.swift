@@ -249,6 +249,8 @@ struct MeshNodeDetailSheet: View {
     @State private var password = ""
     @State private var showingWiFiForm = false
     @State private var showingDisconnectConfirm = false
+    @State private var showingLoRaModeConfirm = false
+    @State private var pendingLoRaMode: String?
 
     private var liveNode: Peer {
         coordinator.nearbyPeers.first(where: { $0.publicKey == node.publicKey }) ?? node
@@ -258,8 +260,11 @@ struct MeshNodeDetailSheet: View {
         NavigationStack {
             List {
                 nodeInfoSection
-                bridgeStatusSection
-                wifiActionSection
+                loraModeSection
+                if liveNode.loraMode != "meshtastic" {
+                    bridgeStatusSection
+                    wifiActionSection
+                }
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
@@ -301,6 +306,24 @@ struct MeshNodeDetailSheet: View {
             } message: {
                 Text("This will disconnect the mesh node from WiFi and clear its stored credentials.")
             }
+            .alert("Switch LoRa Mode", isPresented: $showingLoRaModeConfirm) {
+                Button("Cancel", role: .cancel) {
+                    pendingLoRaMode = nil
+                }
+                Button("Switch & Reboot", role: .destructive) {
+                    if let mode = pendingLoRaMode {
+                        coordinator.switchLoRaMode(mode, forMeshNode: liveNode)
+                    }
+                    pendingLoRaMode = nil
+                    dismiss()
+                }
+            } message: {
+                if pendingLoRaMode == "meshtastic" {
+                    Text("Switch to Meshtastic mode? The node will interoperate with Meshtastic mesh networks for extended range. WiFi bridge relay will be disabled and max message size is reduced to 233 bytes. The node will reboot.")
+                } else {
+                    Text("Switch to Native mode? Full Pigeon features will be restored \u{2014} WiFi bridge relay, message fragmentation (up to ~2KB), and faster data rate. The node will reboot.")
+                }
+            }
         }
     }
 
@@ -318,6 +341,40 @@ struct MeshNodeDetailSheet: View {
             }
         }
         .listRowBackground(PigeonTheme.surface)
+    }
+
+    private var loraModeSection: some View {
+        Section("LoRa Mode") {
+            Picker("Mode", selection: loraModeBinding) {
+                Text("Native").tag("native")
+                Text("Meshtastic").tag("meshtastic")
+            }
+            .pickerStyle(.segmented)
+
+            Text(loraModeDescription)
+                .font(PigeonTheme.captionFont)
+                .foregroundColor(PigeonTheme.textSecondary)
+        }
+        .listRowBackground(PigeonTheme.surface)
+    }
+
+    private var loraModeBinding: Binding<String> {
+        Binding(
+            get: { liveNode.loraMode },
+            set: { newMode in
+                guard newMode != liveNode.loraMode else { return }
+                pendingLoRaMode = newMode
+                showingLoRaModeConfirm = true
+            }
+        )
+    }
+
+    private var loraModeDescription: String {
+        if liveNode.loraMode == "meshtastic" {
+            return "Interoperates with Meshtastic mesh networks for extended range. WiFi bridge relay disabled. Max message size: 233 bytes."
+        } else {
+            return "Full Pigeon features \u{2014} WiFi bridge relay, message fragmentation (up to ~2KB), faster data rate."
+        }
     }
 
     private var bridgeStatusSection: some View {
