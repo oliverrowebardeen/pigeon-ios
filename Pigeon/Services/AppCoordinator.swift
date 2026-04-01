@@ -220,6 +220,11 @@ final class AppCoordinator {
         bleManager.clearWiFiCredentials(forMeshNode: peripheralID)
     }
 
+    func switchLoRaMode(_ mode: String, forMeshNode peer: Peer) {
+        guard let peripheralID = bleManager.peripheralID(forPeerPublicKey: peer.publicKey) else { return }
+        bleManager.sendLoRaModeSwitch(mode, toMeshNode: peripheralID)
+    }
+
     // MARK: - Messaging
 
     func sendMessage(text: String, in conversation: Conversation, replyTo replyTarget: Message? = nil) async throws -> Message {
