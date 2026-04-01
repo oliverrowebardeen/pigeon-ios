@@ -47,6 +47,25 @@ nonisolated enum TransportType: Sendable {
     case none
 }
 
+nonisolated enum OutboundSendResult: Sendable, Equatable {
+    case directBLE
+    case mesh
+    case meshGateway
+    case relay
+    case queued
+
+    var usedRelay: Bool {
+        if case .relay = self {
+            return true
+        }
+        return false
+    }
+
+    var wasSent: Bool {
+        self != .queued
+    }
+}
+
 @Observable
 @MainActor
 final class AppCoordinator {
@@ -599,8 +618,11 @@ final class AppCoordinator {
         canAttemptBLEMeshDelivery(to: recipientPublicKey) || hasInternetConnectivity
     }
 
-    private func outboundStatusAfterSend(to recipientPublicKey: Data, usedRelay: Bool) -> MessageStatus {
-        if usedRelay || canAttemptBLEMeshDelivery(to: recipientPublicKey) {
+    private func outboundStatusAfterSend(
+        to recipientPublicKey: Data,
+        result: OutboundSendResult
+    ) -> MessageStatus {
+        if result.wasSent || canAttemptBLEMeshDelivery(to: recipientPublicKey) {
             return .sent
         }
         return .queued
@@ -1297,14 +1319,14 @@ final class AppCoordinator {
                 timestamp: message.timestamp
             )
 
-            let usedInternetRelay = await sendViaAvailableTransports(
+            let sendResult = await sendViaAvailableTransports(
                 envelope,
                 recipientPublicKey: recipientKey
             )
 
             let outboundStatus = outboundStatusAfterSend(
                 to: recipientKey,
-                usedRelay: usedInternetRelay
+                result: sendResult
             )
 
             try store.updateMessageStatus(id: message.id, status: outboundStatus)
@@ -1537,19 +1559,15 @@ final class AppCoordinator {
     ) async throws {
         let authenticationStatus = authenticateIncomingPayload(payload)
 
-        switch authenticationStatus {
-        case .verified:
-            break
-        case .unsignedLegacy:
-            securityLog(
-                "Accepted unsigned legacy message \(payload.logicalMessageID.uuidString.lowercased()) " +
-                "from \(PigeonIdentity.makePigeonID(fromPublicKeyData: payload.senderPublicKey))"
-            )
-        case .invalid:
-            securityLog(
-                "Dropped message \(payload.logicalMessageID.uuidString.lowercased()) with invalid signature " +
-                "from \(PigeonIdentity.makePigeonID(fromPublicKeyData: payload.senderPublicKey))"
-            )
+        guard authenticationStatus == .verified else {
+            switch authenticationStatus {
+            case .missingSignature:
+                securityLog("Dropped incoming payload without sender signature")
+            case .invalid:
+                securityLog("Dropped incoming payload with invalid sender signature")
+            case .verified:
+                break
+            }
             return
         }
 
@@ -1563,15 +1581,13 @@ final class AppCoordinator {
 
         try await applyIncomingPayload(
             payload,
-            source: source,
-            authenticationStatus: authenticationStatus
+            source: source
         )
     }
 
     private func applyIncomingPayload(
         _ payload: WirePayloadV2,
-        source: InboundSource,
-        authenticationStatus: WirePayloadAuthenticationStatus
+        source: InboundSource
     ) async throws {
         switch payload.eventType {
         case .directText:
@@ -1581,7 +1597,7 @@ final class AppCoordinator {
         case .directReaction:
             try handleIncomingDirectReaction(payload)
         case .groupKeyShare:
-            try handleIncomingGroupKeyShare(payload, authenticationStatus: authenticationStatus)
+            try handleIncomingGroupKeyShare(payload)
         case .groupControl:
             try handleIncomingGroupControl(payload)
         case .groupMessage:
@@ -1706,10 +1722,7 @@ final class AppCoordinator {
         }
     }
 
-    private func handleIncomingGroupKeyShare(
-        _ payload: WirePayloadV2,
-        authenticationStatus: WirePayloadAuthenticationStatus
-    ) throws {
+    private func handleIncomingGroupKeyShare(_ payload: WirePayloadV2) throws {
         guard let keyShare = payload.groupKeyShare,
               let keyData = Data(base64Encoded: keyShare.keyB64)
         else {
@@ -1717,35 +1730,17 @@ final class AppCoordinator {
         }
 
         let existing = try store.fetchGroup(id: keyShare.groupID)
-        let trustedOwnerPublicKey: Data
-
-        switch authenticationStatus {
-        case .verified:
-            guard payload.senderPublicKey == keyShare.ownerPublicKey else {
-                securityLog(
-                    "Dropped signed group key share for \(keyShare.groupID.uuidString.lowercased()) " +
-                    "because sender did not match claimed owner"
-                )
-                return
-            }
-
-            if let existing, existing.ownerPublicKey != payload.senderPublicKey {
-                securityLog(
-                    "Dropped signed group key share for \(keyShare.groupID.uuidString.lowercased()) " +
-                    "from non-owner sender \(PigeonIdentity.makePigeonID(fromPublicKeyData: payload.senderPublicKey))"
-                )
-                return
-            }
-
-            trustedOwnerPublicKey = payload.senderPublicKey
-        case .unsignedLegacy:
-            securityLog(
-                "Accepted unsigned legacy group key share for \(keyShare.groupID.uuidString.lowercased())"
-            )
-            trustedOwnerPublicKey = existing?.ownerPublicKey ?? keyShare.ownerPublicKey
-        case .invalid:
+        guard payload.senderPublicKey == keyShare.ownerPublicKey else {
+            securityLog("Dropped group key share whose sender did not match the claimed owner")
             return
         }
+
+        if let existing, existing.ownerPublicKey != payload.senderPublicKey {
+            securityLog("Dropped group key share from a non-owner sender")
+            return
+        }
+
+        let trustedOwnerPublicKey = payload.senderPublicKey
 
         let group = Group(
             id: keyShare.groupID,
@@ -2095,10 +2090,10 @@ final class AppCoordinator {
             for (memberKey, envelope) in envelopes {
                 let isNearby = nearbyKeys.contains(memberKey)
                 group.addTask {
-                    let usedRelay = await self.sendViaAvailableTransports(
+                    let sendResult = await self.sendViaAvailableTransports(
                         envelope, recipientPublicKey: memberKey
                     )
-                    return usedRelay || isNearby
+                    return sendResult.wasSent || isNearby
                 }
             }
 
@@ -2211,17 +2206,17 @@ final class AppCoordinator {
     private func sendViaAvailableTransports(
         _ envelope: MessageEnvelope,
         recipientPublicKey: Data
-    ) async -> Bool {
+    ) async -> OutboundSendResult {
         // 1. Peer is directly connected — send via BLE
         if isPeerNearby(publicKey: recipientPublicKey) {
             bleManager.sendMessage(envelope, to: recipientPublicKey)
-            return false
+            return .directBLE
         }
 
         // 2. Peer is mesh-reachable — send via mesh (mesh-first, skip relay)
         if meshReachabilityCache[recipientPublicKey] == true {
             bleManager.sendMessage(envelope, to: recipientPublicKey)
-            return false
+            return .mesh
         }
 
         // 3. Peer is off-mesh — we need internet
@@ -2230,7 +2225,7 @@ final class AppCoordinator {
         if hasInternetConnectivity, let relayClient {
             do {
                 try await relayClient.sendEnvelope(envelope)
-                return true
+                return .relay
             } catch {
                 // Relay failed, fall through to mesh attempts
             }
@@ -2241,7 +2236,7 @@ final class AppCoordinator {
             do {
                 await relayClient.updateBridgeCandidates(currentBridgeCandidates())
                 try await relayClient.sendEnvelopeBootstrappingBridgeIfNeeded(envelope)
-                return true
+                return .relay
             } catch {
                 // Bridge bootstrap failed, fall through to mesh attempts
             }
@@ -2251,7 +2246,7 @@ final class AppCoordinator {
         let directPeerKeys = directlyConnectedPeerKeys
         if let gatewayHop = await meshTopology.firstHopToGateway(from: directPeerKeys) {
             bleManager.sendMessage(envelope, to: gatewayHop)
-            return false
+            return .meshGateway
         }
 
         // 4. Pigeon node in meshtastic mode — send CompactEnvelope via Pigeon BLE
@@ -2259,7 +2254,7 @@ final class AppCoordinator {
             let compactData = CompactEnvelopeCodec.encodeDirectEnvelope(envelope)
             if compactData.count <= 233 {
                 bleManager.broadcastRawData(compactData)
-                return false
+                return .mesh
             }
             // Oversized — can't send via meshtastic, don't fall through to flood
         }
@@ -2269,7 +2264,7 @@ final class AppCoordinator {
             let compactData = CompactEnvelopeCodec.encodeDirectEnvelope(envelope)
             if compactData.count <= MeshtasticConstants.maxLoRaPayloadSize {
                 _ = meshtasticBLEManager.sendPigeonPayload(compactData)
-                return false
+                return .mesh
             }
             // Payload too large for LoRa — fall through
         }
@@ -2277,8 +2272,9 @@ final class AppCoordinator {
         // 6. No internet, no gateway — flood to Pigeon mesh and hope
         if canAttemptBLEMeshDelivery(to: recipientPublicKey) {
             bleManager.sendMessage(envelope, to: recipientPublicKey)
+            return .mesh
         }
-        return false
+        return .queued
     }
 
 
@@ -2332,7 +2328,9 @@ final class AppCoordinator {
     }
 
     private func securityLog(_ message: @autoclosure () -> String) {
+#if DEBUG
         print("[Pigeon][Security] \(message())")
+#endif
     }
 
     private func encodeSignedWirePayload(_ payload: WirePayloadV2) throws -> Data {
@@ -2627,10 +2625,13 @@ final class AppCoordinator {
                 timestamp: message.timestamp
             )
 
-            let usedRelay = await sendViaAvailableTransports(envelope, recipientPublicKey: recipientKey)
+            let sendResult = await sendViaAvailableTransports(
+                envelope,
+                recipientPublicKey: recipientKey
+            )
             let updatedStatus = outboundStatusAfterSend(
                 to: recipientKey,
-                usedRelay: usedRelay
+                result: sendResult
             )
             try store.updateMessageStatus(id: message.id, status: updatedStatus)
 

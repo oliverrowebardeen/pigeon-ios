@@ -55,7 +55,10 @@ actor InternetRelayClient {
     ) {
         self.relayURL = relayURL
         self.session = RelaySessionActor(identity: identity)
-        self.sendSession = RelaySendSession(relayURL: relayURL)
+        self.sendSession = RelaySendSession(
+            relayURL: relayURL,
+            sendBridgeFrame: sendBridgeFrame
+        )
         self.bridgeFallbackEnabled = bridgeFallbackEnabled
         self.sendBridgeFrame = sendBridgeFrame
     }
@@ -139,6 +142,8 @@ actor InternetRelayClient {
     }
 
     func handleBridgeControlFrame(_ frame: BridgeControlFrame, from peerPublicKey: Data) async {
+        await sendSession.handleBridgeControlFrame(frame, from: peerPublicKey)
+
         if let pendingBridgeTransport {
             await pendingBridgeTransport.receive(frame, from: peerPublicKey)
             return
@@ -148,6 +153,8 @@ actor InternetRelayClient {
     }
 
     func handleBridgePeerLoss(_ publicKey: Data) async {
+        await sendSession.handleBridgePeerLoss(publicKey)
+
         if pendingBridgePublicKey == publicKey, let pendingBridgeTransport {
             self.pendingBridgeTransport = nil
             pendingBridgeTunnelID = nil
@@ -171,12 +178,11 @@ actor InternetRelayClient {
     }
 
     func sendEnvelope(_ envelope: MessageEnvelope) async throws {
-        if currentState == .internetDirectConnected {
-            // Sealed sender: use anonymous send session (no identity on wire)
+        switch currentState {
+        case .internetDirectConnected, .internetBridgedConnected:
             try await sendSession.sendEnvelope(envelope)
-        } else {
-            // Bridge mode: legacy single-connection send (until bridge dual-tunnel support)
-            try await session.sendEnvelope(envelope)
+        case .bleOnly, .internetDisconnected:
+            throw RelaySessionActorError.notConnected
         }
     }
 
@@ -186,7 +192,7 @@ actor InternetRelayClient {
             return
         }
         if currentState == .internetBridgedConnected {
-            try await session.sendEnvelope(envelope)
+            try await sendSession.sendEnvelope(envelope)
             return
         }
 
@@ -199,7 +205,7 @@ actor InternetRelayClient {
         if currentState == .internetDirectConnected {
             try await sendSession.sendEnvelope(envelope)
         } else if currentState == .internetBridgedConnected {
-            try await session.sendEnvelope(envelope)
+            try await sendSession.sendEnvelope(envelope)
         } else {
             throw RelaySessionActorError.notConnected
         }
@@ -226,6 +232,7 @@ actor InternetRelayClient {
             await activeBridgeTransport.stop()
         }
         await session.disconnect(notify: false)
+        await sendSession.disconnect()
         await updateState(.internetDisconnected, activeBridge: nil)
 
         let shouldPreferBridge = bridgeFallbackEnabled &&
@@ -388,6 +395,7 @@ actor InternetRelayClient {
 
 extension InternetRelayClient: RelaySessionActorDelegate {
     func relaySession(_ session: RelaySessionActor, didConnect path: RelayTransportPath) async {
+        await sendSession.updateTransportPath(path)
         switch path {
         case .direct:
             await updateState(.internetDirectConnected, activeBridge: nil)
@@ -397,6 +405,7 @@ extension InternetRelayClient: RelaySessionActorDelegate {
     }
 
     func relaySession(_ session: RelaySessionActor, didDisconnect path: RelayTransportPath) async {
+        await sendSession.disconnect()
         if case .bridged = path {
             activeBridgeTransport = nil
         }

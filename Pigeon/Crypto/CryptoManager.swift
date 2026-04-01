@@ -12,7 +12,7 @@ nonisolated enum CryptoManagerError: Error {
 
 nonisolated enum WirePayloadAuthenticationStatus: Sendable, Equatable {
     case verified
-    case unsignedLegacy
+    case missingSignature
     case invalid
 }
 
@@ -207,7 +207,7 @@ nonisolated struct CryptoManager: Sendable {
     func verifyPayloadSignature(_ payload: WirePayloadV2) -> WirePayloadAuthenticationStatus {
         switch (payload.signature, payload.senderSigningPublicKey) {
         case (nil, nil):
-            return .unsignedLegacy
+            return .missingSignature
         case (.some, nil), (nil, .some):
             return .invalid
         case let (.some(signature), .some(senderSigningPublicKey)):

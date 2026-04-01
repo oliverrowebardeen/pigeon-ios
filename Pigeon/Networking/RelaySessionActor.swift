@@ -7,6 +7,7 @@ nonisolated enum RelaySessionActorError: Error {
     case invalidPayload
     case authFailed
     case authTimedOut
+    case sessionReplaced
     case sendTimedOut
     case sendRejected(code: String)
 }
@@ -229,6 +230,9 @@ actor RelaySessionActor {
             let payload: RelayMessageAcceptedPayload = try decodePayload(payloadAny)
             completePendingMessageAcceptance(messageID: reqID ?? payload.messageID)
 
+        case "session_replaced":
+            throw RelaySessionActorError.sessionReplaced
+
         case "error":
             let payload: RelayErrorPayload = try decodePayload(payloadAny)
             if payload.code == "auth_failed" {
@@ -405,7 +409,7 @@ actor RelaySessionActor {
     }
 }
 
-private struct RelayOutgoingFrame<Payload: Encodable>: Encodable {
+nonisolated private struct RelayOutgoingFrame<Payload: Encodable>: Encodable {
     let type: String
     let reqID: String?
     let payload: Payload
@@ -417,7 +421,7 @@ private struct RelayOutgoingFrame<Payload: Encodable>: Encodable {
     }
 }
 
-private struct RelayAuthHelloPayload: Codable {
+nonisolated private struct RelayAuthHelloPayload: Codable {
     let clientPubkeyB64: String
 
     enum CodingKeys: String, CodingKey {
@@ -425,7 +429,7 @@ private struct RelayAuthHelloPayload: Codable {
     }
 }
 
-private struct RelayAuthChallengePayload: Codable {
+nonisolated private struct RelayAuthChallengePayload: Codable {
     let challengeID: String
     let serverPubkeyB64: String
     let nonceB64: String
@@ -441,7 +445,7 @@ private struct RelayAuthChallengePayload: Codable {
     }
 }
 
-private struct RelayAuthProvePayload: Codable {
+nonisolated private struct RelayAuthProvePayload: Codable {
     let challengeID: String
     let proofB64: String
 
@@ -451,7 +455,7 @@ private struct RelayAuthProvePayload: Codable {
     }
 }
 
-private struct RelayAuthOKPayload: Codable {
+nonisolated private struct RelayAuthOKPayload: Codable {
     let identityHashHex: String
     let sessionExpiresAtMS: Int64
 
@@ -461,7 +465,7 @@ private struct RelayAuthOKPayload: Codable {
     }
 }
 
-private struct RelayMessageSendPayload: Codable {
+nonisolated private struct RelayMessageSendPayload: Codable {
     let messageID: String
     let recipientHashHex: String
     let envelopeB64: String
@@ -474,7 +478,7 @@ private struct RelayMessageSendPayload: Codable {
 }
 
 
-private struct RelayMessageAcceptedPayload: Codable {
+nonisolated private struct RelayMessageAcceptedPayload: Codable {
     let messageID: String
     let queued: Bool
     let queueDepth: Int
@@ -486,7 +490,7 @@ private struct RelayMessageAcceptedPayload: Codable {
     }
 }
 
-struct RelayMessageDeliverPayload: Codable {
+nonisolated struct RelayMessageDeliverPayload: Codable {
     let messageID: String
     let senderHashHex: String?
     let envelopeB64: String
@@ -500,7 +504,7 @@ struct RelayMessageDeliverPayload: Codable {
     }
 }
 
-private struct RelayPushRegisterPayload: Codable {
+nonisolated private struct RelayPushRegisterPayload: Codable {
     let deviceTokenHex: String
     let apnsEnv: String
     let topic: String?
@@ -512,9 +516,9 @@ private struct RelayPushRegisterPayload: Codable {
     }
 }
 
-private struct RelayErrorPayload: Codable {
+nonisolated private struct RelayErrorPayload: Codable {
     let code: String
     let message: String
 }
 
-private struct RelayEmptyPayload: Codable {}
+nonisolated private struct RelayEmptyPayload: Codable {}
