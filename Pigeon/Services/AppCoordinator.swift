@@ -2683,12 +2683,24 @@ final class AppCoordinator {
     }
 
     private static func relayWebSocketURL(bundle: Bundle = .main) -> URL? {
-        let enabled = (bundle.object(forInfoDictionaryKey: "PigeonRelayEnabled") as? Bool) ?? false
+        let enabled: Bool
+        switch bundle.object(forInfoDictionaryKey: "PigeonRelayEnabled") {
+        case let value as Bool:
+            enabled = value
+        case let value as String:
+            enabled = ["1", "true", "yes", "on"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        default:
+            enabled = false
+        }
+
         guard enabled else { return nil }
         guard let relayURLString = bundle.object(forInfoDictionaryKey: "PigeonRelayWebSocketURL") as? String else {
             return nil
         }
-        return URL(string: relayURLString)
+
+        let trimmedRelayURLString = relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRelayURLString.isEmpty else { return nil }
+        return URL(string: trimmedRelayURLString)
     }
 
     private static func loadInternetBridgeEnabled(userDefaults: UserDefaults = .standard) -> Bool {

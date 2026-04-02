@@ -16,27 +16,39 @@ Thanks for your interest in contributing to Pigeon. This guide will help you get
 
 That's it -- there are zero external dependencies to install.
 
-## Setting Your Team ID
+## Local Configuration
 
 To build and run on a physical device, create a file called `Pigeon.local.xcconfig` in the project root:
 
-```
+```xcconfig
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
 ```
 
-Replace `YOUR_TEAM_ID` with your Apple Developer Team ID. This file is gitignored and will not be committed.
+Relay and bridge features are disabled by default in source builds. If you want them for local development, add:
+
+```xcconfig
+PIGEON_RELAY_ENABLED = YES
+PIGEON_RELAY_WEBSOCKET_URL = ws://127.0.0.1:8080/v1/ws
+```
+
+Replace `YOUR_TEAM_ID` with your Apple Developer Team ID. Use a LAN or public `ws://` / `wss://` URL instead of `127.0.0.1` when testing on physical devices. This file is gitignored and will not be committed.
 
 ## Running on Simulator
 
 Build from the command line:
 
 ```bash
-xcodebuild -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+xcodebuild -project Pigeon.xcodeproj -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
 
 Or just hit Run in Xcode with a simulator target selected.
 
 **Note:** BLE features do not work on the iOS Simulator. You need 2+ physical iPhones to test mesh networking.
+
+## Protocol References
+
+- `docs/relay-and-bridge-protocol.md`
+- `docs/compact-envelope-spec.md`
 
 ## Submitting a Pull Request
 

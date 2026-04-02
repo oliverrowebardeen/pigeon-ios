@@ -11,7 +11,7 @@ Pigeon is an encrypted mesh messenger for iOS. It sends text messages between iP
 - **BLE mesh networking** — Messages hop across nearby iPhones using Bluetooth Low Energy. Multi-hop relay with TTL-based forwarding and deduplication.
 - **End-to-end encryption** — Curve25519 ECDH key agreement, AES-256-GCM authenticated encryption, HKDF-SHA256 key derivation. Keys generated on-device and stored in the iOS Keychain.
 - **Internet relay fallback** — When both devices have internet, messages route through an encrypted WebSocket relay with X25519 challenge-response authentication.
-- **Bridge mode** — A phone with internet access can relay messages for nearby offline phones, bridging BLE mesh to the internet relay transparently.
+- **Bridge mode** — A phone with internet access can relay messages for nearby offline phones, bridging BLE mesh to the internet relay transparently while preserving sealed-sender anonymity.
 - **Meshtastic LoRa support** — Long-range mesh messaging over LoRa radio. Connect directly to stock Meshtastic nodes via Meshtastic BLE, or use a Pigeon mesh node in Meshtastic mode for seamless interop. Compact binary wire format fits encrypted envelopes within LoRa payload limits. Uses Meshtastic portnum 256 — Pigeon traffic is invisible to other Meshtastic apps.
 - **Group messaging** — Symmetric key encryption with epoch-based key rotation on membership changes. Owner-controlled member management. Groups use single-broadcast envelopes over LoRa instead of per-member fan-out.
 - **Push notifications** — APNS integration through the relay server. The server sends push payloads without ever seeing message content.
@@ -69,6 +69,11 @@ Pigeon automatically selects the best available transport:
 
 Transport switching is automatic and transparent. The app shows the current transport state in the UI.
 
+## Protocol Docs
+
+- [Relay and bridge protocol](docs/relay-and-bridge-protocol.md) — signed `WirePayloadV2`, relay WebSocket roles, and bridge tunnel framing
+- [Compact envelope spec](docs/compact-envelope-spec.md) — binary envelope format used for Meshtastic LoRa transport
+
 ## Encryption
 
 Every message is end-to-end encrypted before it leaves the sending device:
@@ -93,21 +98,36 @@ Every message is end-to-end encrypted before it leaves the sending device:
 ```bash
 git clone https://github.com/oliverrowebardeen/pigeon-ios.git
 cd pigeon-ios
-xcodebuild -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
+xcodebuild -project Pigeon.xcodeproj -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 ```
 
 Or open `Pigeon.xcodeproj` in Xcode and hit Run.
+
+### Local Relay / Bridge Configuration
+
+Internet relay and bridge features are opt-in in source builds so contributors do not hit the production relay by default.
+
+Create `Pigeon.local.xcconfig` in the project root if you want relay features enabled locally:
+
+```xcconfig
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
+PIGEON_RELAY_ENABLED = YES
+PIGEON_RELAY_WEBSOCKET_URL = ws://127.0.0.1:8080/v1/ws
+```
+
+Use a LAN or public `ws://` / `wss://` URL instead of `127.0.0.1` when testing on physical devices.
 
 ### Code Signing for Physical Devices
 
 BLE doesn't work on the iOS Simulator — you need physical iPhones. To build on a device:
 
 1. Create `Pigeon.local.xcconfig` in the project root:
-   ```
+   ```xcconfig
    DEVELOPMENT_TEAM = YOUR_TEAM_ID
    ```
-2. This file is gitignored. Find your Team ID in [Apple Developer > Membership](https://developer.apple.com/account).
-3. Build and run on your device from Xcode.
+2. Add `PIGEON_RELAY_ENABLED` / `PIGEON_RELAY_WEBSOCKET_URL` there too if you want relay or bridge mode during local testing.
+3. This file is gitignored. Find your Team ID in [Apple Developer > Membership](https://developer.apple.com/account).
+4. Build and run on your device from Xcode.
 
 You'll need **2+ iPhones** to test BLE mesh messaging.
 
@@ -118,7 +138,7 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 - BLE mesh messaging with multi-hop relay and deduplication
 - End-to-end encryption (Curve25519 + AES-256-GCM) with sealed sender
 - Internet relay transport with WebSocket and X25519 auth
-- Bridge mode (BLE-to-internet forwarding)
+- Bridge mode (anonymous send tunnel + authenticated receive tunnel)
 - Meshtastic LoRa transport (stock Meshtastic BLE + Pigeon node meshtastic mode, compact binary envelopes)
 - Group messaging with epoch-based key rotation
 - Push notifications via APNS
