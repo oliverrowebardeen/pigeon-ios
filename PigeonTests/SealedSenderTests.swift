@@ -229,8 +229,8 @@ struct SealedSenderTests {
         #expect(crypto.verifyPayloadSignature(tamperedPayload) == .invalid)
     }
 
-    @Test("Unsigned legacy payload is still accepted")
-    func unsignedLegacyPayloadIsAccepted() {
+    @Test("Unsigned payload is rejected")
+    func unsignedPayloadIsRejected() {
         let crypto = CryptoManager()
         let sender = Curve25519.KeyAgreement.PrivateKey()
         let payload = WirePayloadV2(
@@ -240,8 +240,137 @@ struct SealedSenderTests {
             directText: DirectTextPayload(text: "legacy unsigned", reply: nil)
         )
 
-        #expect(crypto.verifyPayloadSignature(payload) == .unsignedLegacy)
+        #expect(crypto.verifyPayloadSignature(payload) == .missingSignature)
     }
+
+    @Test("Bridged send session uses anonymous msg_send tunnel")
+    func bridgedSendSessionUsesAnonymousMsgSendTunnel() async throws {
+        let recorder = BridgeFrameRecorder()
+        let bridgePublicKey = Data(repeating: 0x42, count: 32)
+        let candidate = BridgeCandidate(
+            publicKey: bridgePublicKey,
+            pigeonID: "bridge",
+            rssi: -42,
+            relayReachable: true,
+            bridgeEnabled: true,
+            capacityRemaining: 2,
+            lastStatusAt: Date()
+        )
+        let session = RelaySendSession(
+            relayURL: URL(string: "wss://relay.example/v1/ws")!,
+            sendBridgeFrame: { peerPublicKey, frame in
+                await recorder.append(peerPublicKey: peerPublicKey, frame: frame)
+            }
+        )
+        await session.updateTransportPath(.bridged(candidate))
+
+        let envelope = MessageEnvelope(
+            id: UUID(),
+            senderPublicKey: Data(repeating: 0xAA, count: 32),
+            recipientPublicKey: Data(repeating: 0xBB, count: 32),
+            timestamp: Date(),
+            nonce: Data(repeating: 0x01, count: 12),
+            ciphertext: Data("sealed".utf8),
+            tag: Data(repeating: 0x02, count: 16)
+        )
+
+        let sendTask = Task {
+            try await session.sendEnvelope(envelope)
+        }
+
+        try await waitForFrameCount(recorder, atLeast: 1)
+        let firstFrame = try #require(await recorder.frame(at: 0))
+        #expect(firstFrame.peerPublicKey == bridgePublicKey)
+
+        guard case .tunnelOpen(let tunnelOpen) = firstFrame.frame.payload else {
+            Issue.record("Expected first bridge frame to open a send tunnel")
+            return
+        }
+
+        await session.handleBridgeControlFrame(
+            BridgeProtocol.tunnelOpened(tunnelOpen.tunnelID),
+            from: bridgePublicKey
+        )
+
+        try await waitForFrameCount(recorder, atLeast: 2)
+        let secondFrame = try #require(await recorder.frame(at: 1))
+
+        guard case .tunnelData(let tunnelData) = secondFrame.frame.payload else {
+            Issue.record("Expected tunneled relay data after tunnel open")
+            return
+        }
+
+        let tunneledJSON = try decodeTunneledJSON(from: tunnelData)
+        #expect(tunneledJSON["type"] as? String == "msg_send")
+        #expect(tunneledJSON["payload"] != nil)
+
+        let requestID = try #require(tunneledJSON["req_id"] as? String)
+        await session.handleBridgeControlFrame(
+            BridgeProtocol.tunnelData(
+                tunnelOpen.tunnelID,
+                text: """
+                {"type":"msg_accepted","req_id":"\(requestID)","payload":{"message_id":"\(envelope.id.uuidString)","queued":true,"queue_depth":1}}
+                """
+            ),
+            from: bridgePublicKey
+        )
+
+        try await sendTask.value
+    }
+}
+
+private actor BridgeFrameRecorder {
+    struct RecordedFrame: Sendable {
+        let peerPublicKey: Data
+        let frame: BridgeControlFrame
+    }
+
+    private var frames: [RecordedFrame] = []
+
+    func append(peerPublicKey: Data, frame: BridgeControlFrame) {
+        frames.append(RecordedFrame(peerPublicKey: peerPublicKey, frame: frame))
+    }
+
+    func count() -> Int {
+        frames.count
+    }
+
+    func frame(at index: Int) -> RecordedFrame? {
+        guard frames.indices.contains(index) else { return nil }
+        return frames[index]
+    }
+}
+
+private enum BridgeTestError: Error {
+    case timedOut
+    case invalidTunneledPayload
+}
+
+private func waitForFrameCount(
+    _ recorder: BridgeFrameRecorder,
+    atLeast expectedCount: Int
+) async throws {
+    for _ in 0..<50 {
+        if await recorder.count() >= expectedCount {
+            return
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+
+    throw BridgeTestError.timedOut
+}
+
+private func decodeTunneledJSON(from payload: TunnelDataPayload) throws -> [String: Any] {
+    guard let payloadData = Data(base64Encoded: payload.payloadB64) else {
+        throw BridgeTestError.invalidTunneledPayload
+    }
+
+    let jsonObject = try JSONSerialization.jsonObject(with: payloadData)
+    guard let dictionary = jsonObject as? [String: Any] else {
+        throw BridgeTestError.invalidTunneledPayload
+    }
+
+    return dictionary
 }
 
 @Suite("Group Invite")

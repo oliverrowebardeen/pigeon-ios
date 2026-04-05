@@ -21,9 +21,9 @@
 		<true/>
 	</dict>
 	<key>PigeonRelayEnabled</key>
-	<true/>
+	<string>$(PIGEON_RELAY_ENABLED)</string>
 	<key>PigeonRelayWebSocketURL</key>
-	<string>wss://relay.example.com/v1/ws</string>
+	<string>$(PIGEON_RELAY_WEBSOCKET_URL)</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
