@@ -78,10 +78,11 @@ Transport switching is automatic and transparent. The app shows the current tran
 
 Every message is end-to-end encrypted before it leaves the sending device:
 
-- **Identity** — Each device generates a Curve25519 keypair on first launch. The private key is stored in the iOS Keychain (`kSecAttrAccessibleAfterFirstUnlock`). The public key serves as the device identity.
+- **Identity** — Each device generates a long-term X25519 keypair plus an Ed25519 signing keypair on first launch. Private keys are stored in the iOS Keychain (`kSecAttrAccessibleAfterFirstUnlock`). The X25519 public key serves as the device identity; the Ed25519 key authenticates payload contents.
 - **Key agreement** — ECDH (Elliptic Curve Diffie-Hellman) with Curve25519 derives a shared secret between sender and recipient.
 - **Key derivation** — HKDF-SHA256 derives a 256-bit symmetric key from the shared secret.
 - **Encryption** — AES-256-GCM with a fresh random nonce per message. Provides authenticated encryption (confidentiality + integrity + authentication).
+- **Payload signatures** — Every `WirePayloadV2` body is Ed25519-signed by the sender before encryption. Relay, bridge phones, and recipients all reject unsigned payloads, and recipients pin the Ed25519 key to the X25519 identity on first contact so a later mismatch is treated as impersonation. See [docs/relay-and-bridge-protocol.md](docs/relay-and-bridge-protocol.md) for the canonical signed-bytes layout.
 - **Sealed sender** — Messages use ephemeral Curve25519 keys so the relay server only sees the recipient's routing hash, an unlinkable ephemeral public key, and opaque ciphertext. It cannot identify the sender or decrypt content. Bridge phones similarly forward encrypted frames they cannot read.
 - **Group encryption** — Groups use symmetric key encryption with epoch-based rotation. When members are added or removed, the group key rotates and is redistributed to active members.
 
