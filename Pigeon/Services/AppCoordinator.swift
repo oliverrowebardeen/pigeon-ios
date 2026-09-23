@@ -1541,7 +1541,7 @@ final class AppCoordinator {
             }
 
             // Client-side delivery ack — send encrypted ack back to real sender
-            if source == .relay {
+            if source == .relay, payload.eventType.requiresDeliveryAcknowledgment {
                 await sendClientSideDeliveryAck(
                     for: payload.logicalMessageID,
                     to: payload.senderPublicKey
@@ -1568,7 +1568,7 @@ final class AppCoordinator {
             case .verified:
                 break
             }
-            return
+            throw AppCoordinatorError.invalidWirePayload
         }
 
         // Sealed sender: real sender identity comes from the decrypted payload,
@@ -1576,7 +1576,7 @@ final class AppCoordinator {
         let senderPublicKey = payload.senderPublicKey
 
         guard peerKeyChangeWarnings[senderPublicKey] == nil else {
-            return
+            throw AppCoordinatorError.invalidWirePayload
         }
 
         try await applyIncomingPayload(
@@ -2370,7 +2370,7 @@ final class AppCoordinator {
                 "\(PigeonIdentity.makePigeonID(fromPublicKeyData: identityPublicKey)): " +
                 "\(error.localizedDescription)"
             )
-            return true
+            return false
         }
     }
 

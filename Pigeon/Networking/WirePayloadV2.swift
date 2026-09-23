@@ -9,6 +9,9 @@ nonisolated enum WireEventType: String, Codable, Hashable, Sendable {
     case groupMessage = "group_message"
     case groupReaction = "group_reaction"
     case deliveryAck = "delivery_ack"
+
+    // Acknowledging acknowledgments causes an endless relay exchange.
+    var requiresDeliveryAcknowledgment: Bool { self != .deliveryAck }
 }
 
 nonisolated enum GroupControlAction: String, Codable, Hashable, Sendable {

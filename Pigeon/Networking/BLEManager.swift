@@ -754,6 +754,8 @@ final class BLEManager: NSObject {
             if let existing = reassemblyBuffers[header.messageID] {
                 buffer = existing
             } else {
+                purgeExpiredBuffers()
+                guard reassemblyBuffers.count < BLEConstants.maxConcurrentReassemblies else { return }
                 buffer = ReassemblyBuffer(
                     messageID: header.messageID,
                     expectedChunkCount: header.totalChunks
@@ -834,6 +836,8 @@ final class BLEManager: NSObject {
             if let existing = bridgeReassemblyBuffers[header.messageID] {
                 buffer = existing
             } else {
+                purgeExpiredBuffers()
+                guard bridgeReassemblyBuffers.count < BLEConstants.maxConcurrentReassemblies else { return }
                 buffer = ReassemblyBuffer(messageID: header.messageID, expectedChunkCount: header.totalChunks)
                 bridgeReassemblyBuffers[header.messageID] = buffer
                 bridgePacketSources[header.messageID] = source
@@ -1049,6 +1053,7 @@ final class BLEManager: NSObject {
     private func purgeExpiredBuffers() {
         reassemblyBuffers = reassemblyBuffers.filter { !$0.value.isExpired }
         bridgeReassemblyBuffers = bridgeReassemblyBuffers.filter { !$0.value.isExpired }
+        bridgePacketSources = bridgePacketSources.filter { bridgeReassemblyBuffers[$0.key] != nil }
         let adCutoff = Date().addingTimeInterval(-BLEConstants.reachabilityStaleTimeout)
         seenReachabilityAds = seenReachabilityAds.filter { $0.value > adCutoff }
     }

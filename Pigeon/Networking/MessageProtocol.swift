@@ -47,7 +47,7 @@ nonisolated struct PeerIdentityPayload: Codable, Hashable, Sendable {
     let loraMode: String?
 }
 
-nonisolated struct PeerReachabilityPayload: Hashable, Sendable {
+nonisolated struct PeerReachabilityPayload: Codable, Hashable, Sendable {
     let senderPublicKey: Data
     let reachablePeers: [Data]
     let hasInternetGateway: Bool
@@ -56,12 +56,12 @@ nonisolated struct PeerReachabilityPayload: Hashable, Sendable {
     let timestamp: Date
 }
 
-extension PeerReachabilityPayload: Codable {
-    enum CodingKeys: String, CodingKey {
+extension PeerReachabilityPayload {
+    nonisolated enum CodingKeys: String, CodingKey {
         case senderPublicKey, reachablePeers, hasInternetGateway, hopCount, ttl, timestamp
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         senderPublicKey = try container.decode(Data.self, forKey: .senderPublicKey)
         reachablePeers = try container.decode([Data].self, forKey: .reachablePeers)
@@ -189,12 +189,12 @@ nonisolated enum MessageProtocol {
         messageID: UUID,
         maxChunkPayloadSize: Int = BLEConstants.maxChunkPayloadSize
     ) throws -> [Data] {
-        guard maxChunkPayloadSize > 0 else {
+        guard maxChunkPayloadSize > 0, maxChunkPayloadSize <= BLEConstants.maxChunkPayloadSize else {
             throw MessageProtocolError.invalidChunkSize
         }
 
-        let totalChunkCount = max(1, (data.count + maxChunkPayloadSize - 1) / maxChunkPayloadSize)
-        guard totalChunkCount <= Int(UInt16.max) else {
+        let totalChunkCount = max(1, data.count / maxChunkPayloadSize + (data.count % maxChunkPayloadSize == 0 ? 0 : 1))
+        guard totalChunkCount <= Int(BLEConstants.maxReassemblyChunks) else {
             throw MessageProtocolError.payloadTooLarge
         }
 
@@ -239,7 +239,8 @@ nonisolated enum MessageProtocol {
             throw MessageProtocolError.malformedPacket
         }
 
-        guard totalChunks > 0, chunkIndex < totalChunks else {
+        guard totalChunks > 0, totalChunks <= BLEConstants.maxReassemblyChunks,
+              chunkIndex < totalChunks, payloadSize <= BLEConstants.maxChunkPayloadSize else {
             throw MessageProtocolError.malformedPacket
         }
 
@@ -291,7 +292,7 @@ nonisolated enum MessageProtocol {
         let expectedMessageID = firstPacket.header.messageID
         let expectedTotalChunks = firstPacket.header.totalChunks
 
-        guard expectedTotalChunks > 0 else {
+        guard expectedTotalChunks > 0, expectedTotalChunks <= BLEConstants.maxReassemblyChunks else {
             throw MessageProtocolError.inconsistentChunks
         }
 
@@ -302,11 +303,16 @@ nonisolated enum MessageProtocol {
             guard
                 packet.header.messageID == expectedMessageID,
                 packet.header.totalChunks == expectedTotalChunks,
+                packet.header.chunkIndex < expectedTotalChunks,
+                packet.payload.count <= BLEConstants.maxChunkPayloadSize,
                 packet.payload.count == Int(packet.header.payloadSize)
             else {
                 throw MessageProtocolError.inconsistentChunks
             }
 
+            if let previous = chunkMap[packet.header.chunkIndex], previous != packet.payload {
+                throw MessageProtocolError.inconsistentChunks
+            }
             chunkMap[packet.header.chunkIndex] = packet.payload
         }
 

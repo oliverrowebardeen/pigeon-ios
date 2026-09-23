@@ -200,7 +200,7 @@ actor InternetRelayClient {
             throw RelaySessionActorError.notConnected
         }
 
-        try await connectPreferredPath(forceDirectRetry: false)
+        await connectPreferredPath(forceDirectRetry: false)
 
         if currentState == .internetDirectConnected {
             try await sendSession.sendEnvelope(envelope)
@@ -393,7 +393,7 @@ actor InternetRelayClient {
 
 }
 
-extension InternetRelayClient: RelaySessionActorDelegate {
+extension InternetRelayClient: nonisolated RelaySessionActorDelegate {
     func relaySession(_ session: RelaySessionActor, didConnect path: RelayTransportPath) async {
         await sendSession.updateTransportPath(path)
         switch path {

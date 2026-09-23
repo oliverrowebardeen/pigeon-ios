@@ -17,6 +17,10 @@ nonisolated enum BLEConstants {
     static let forwardingRetentionSeconds: TimeInterval = 3_600
     static let reassemblyTimeoutSeconds: TimeInterval = 30
 
+    // Bound memory retained from untrusted, incomplete transfers.
+    static let maxReassemblyChunks: UInt16 = 256
+    static let maxConcurrentReassemblies = 32
+
     static let maxWriteLength = 512
     static let packetHeaderSize = 22
     static let maxChunkPayloadSize = 480

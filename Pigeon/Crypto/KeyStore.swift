@@ -189,13 +189,18 @@ nonisolated final class KeyStore: Sendable {
             kSecAttrAccount as String: account
         ]
 
-        SecItemDelete(baseQuery as CFDictionary)
-
-        var query = baseQuery
-        query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-
-        let status = SecItemAdd(query as CFDictionary, nil)
+        // Update in place: a failed write must not delete the existing identity/key.
+        let attributes: [String: Any] = [kSecValueData as String: data]
+        var status = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var query = baseQuery
+            query[kSecValueData as String] = data
+            query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            status = SecItemAdd(query as CFDictionary, nil)
+            if status == errSecDuplicateItem {
+                status = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
+            }
+        }
         guard status == errSecSuccess else {
             throw KeyStoreError.unexpectedStatus(status)
         }

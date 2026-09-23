@@ -69,14 +69,14 @@ nonisolated struct MeshtasticToRadio: Sendable {
 // MARK: - Protobuf Wire Format Constants
 
 /// Protobuf field numbers for each message type
-private enum FieldNumbers {
-    enum ToRadio {
+nonisolated private enum FieldNumbers {
+    nonisolated enum ToRadio {
         static let packet: UInt32 = 1
         static let wantConfigID: UInt32 = 3
         static let disconnect: UInt32 = 4
     }
 
-    enum FromRadio {
+    nonisolated enum FromRadio {
         static let id: UInt32 = 1
         static let packet: UInt32 = 2
         static let myInfo: UInt32 = 3
@@ -85,7 +85,7 @@ private enum FieldNumbers {
         static let rebooted: UInt32 = 14
     }
 
-    enum MeshPacket {
+    nonisolated enum MeshPacket {
         static let from: UInt32 = 1
         static let to: UInt32 = 2
         static let channel: UInt32 = 3
@@ -97,7 +97,7 @@ private enum FieldNumbers {
         static let priority: UInt32 = 11
     }
 
-    enum DataPayload {
+    nonisolated enum DataPayload {
         static let portnum: UInt32 = 1
         static let payload: UInt32 = 2
         static let dest: UInt32 = 4
@@ -105,26 +105,26 @@ private enum FieldNumbers {
         static let requestID: UInt32 = 6
     }
 
-    enum NodeInfo {
+    nonisolated enum NodeInfo {
         static let num: UInt32 = 1
         static let user: UInt32 = 2
     }
 
-    enum User {
+    nonisolated enum User {
         static let id: UInt32 = 1
         static let longName: UInt32 = 2
         static let shortName: UInt32 = 3
         static let hwModel: UInt32 = 6
     }
 
-    enum MyNodeInfo {
+    nonisolated enum MyNodeInfo {
         static let myNodeNum: UInt32 = 1
     }
 }
 
 // MARK: - Protobuf Wire Types
 
-private enum WireType: UInt8 {
+nonisolated private enum WireType: UInt8 {
     case varint = 0
     case fixed64 = 1
     case lengthDelimited = 2
@@ -171,7 +171,7 @@ nonisolated enum MeshtasticProtobuf {
 
             switch (field, wireType) {
             case (FieldNumbers.FromRadio.id, WireType.varint.rawValue):
-                result.id = UInt32(try reader.readVarint())
+                result.id = try reader.readUInt32Varint()
 
             case (FieldNumbers.FromRadio.packet, WireType.lengthDelimited.rawValue):
                 let bytes = try reader.readBytes()
@@ -186,7 +186,7 @@ nonisolated enum MeshtasticProtobuf {
                 result.nodeInfo = try decodeNodeInfo(bytes)
 
             case (FieldNumbers.FromRadio.configCompleteID, WireType.varint.rawValue):
-                result.configCompleteID = UInt32(try reader.readVarint())
+                result.configCompleteID = try reader.readUInt32Varint()
 
             case (FieldNumbers.FromRadio.rebooted, WireType.varint.rawValue):
                 result.rebooted = try reader.readVarint() != 0
@@ -264,13 +264,13 @@ nonisolated enum MeshtasticProtobuf {
 
             switch (field, wireType) {
             case (FieldNumbers.MeshPacket.from, WireType.varint.rawValue):
-                result.from = UInt32(try reader.readVarint())
+                result.from = try reader.readUInt32Varint()
 
             case (FieldNumbers.MeshPacket.to, WireType.varint.rawValue):
-                result.to = UInt32(try reader.readVarint())
+                result.to = try reader.readUInt32Varint()
 
             case (FieldNumbers.MeshPacket.channel, WireType.varint.rawValue):
-                result.channel = UInt32(try reader.readVarint())
+                result.channel = try reader.readUInt32Varint()
 
             case (FieldNumbers.MeshPacket.decoded, WireType.lengthDelimited.rawValue):
                 let bytes = try reader.readBytes()
@@ -283,13 +283,13 @@ nonisolated enum MeshtasticProtobuf {
                 result.id = try reader.readFixed32()
 
             case (FieldNumbers.MeshPacket.hopLimit, WireType.varint.rawValue):
-                result.hopLimit = UInt32(try reader.readVarint())
+                result.hopLimit = try reader.readUInt32Varint()
 
             case (FieldNumbers.MeshPacket.wantAck, WireType.varint.rawValue):
                 result.wantAck = try reader.readVarint() != 0
 
             case (FieldNumbers.MeshPacket.priority, WireType.varint.rawValue):
-                result.priority = UInt32(try reader.readVarint())
+                result.priority = try reader.readUInt32Varint()
 
             default:
                 try reader.skipField(wireType: wireType)
@@ -342,19 +342,19 @@ nonisolated enum MeshtasticProtobuf {
 
             switch (field, wireType) {
             case (FieldNumbers.DataPayload.portnum, WireType.varint.rawValue):
-                result.portnum = UInt32(try reader.readVarint())
+                result.portnum = try reader.readUInt32Varint()
 
             case (FieldNumbers.DataPayload.payload, WireType.lengthDelimited.rawValue):
                 result.payload = try reader.readBytes()
 
             case (FieldNumbers.DataPayload.dest, WireType.varint.rawValue):
-                result.dest = UInt32(try reader.readVarint())
+                result.dest = try reader.readUInt32Varint()
 
             case (FieldNumbers.DataPayload.source, WireType.varint.rawValue):
-                result.source = UInt32(try reader.readVarint())
+                result.source = try reader.readUInt32Varint()
 
             case (FieldNumbers.DataPayload.requestID, WireType.varint.rawValue):
-                result.requestID = UInt32(try reader.readVarint())
+                result.requestID = try reader.readUInt32Varint()
 
             default:
                 try reader.skipField(wireType: wireType)
@@ -375,7 +375,7 @@ nonisolated enum MeshtasticProtobuf {
 
             switch (field, wireType) {
             case (FieldNumbers.NodeInfo.num, WireType.varint.rawValue):
-                result.num = UInt32(try reader.readVarint())
+                result.num = try reader.readUInt32Varint()
 
             case (FieldNumbers.NodeInfo.user, WireType.lengthDelimited.rawValue):
                 let bytes = try reader.readBytes()
@@ -407,7 +407,7 @@ nonisolated enum MeshtasticProtobuf {
                 result.shortName = try reader.readString()
 
             case (FieldNumbers.User.hwModel, WireType.varint.rawValue):
-                result.hwModel = UInt32(try reader.readVarint())
+                result.hwModel = try reader.readUInt32Varint()
 
             default:
                 try reader.skipField(wireType: wireType)
@@ -426,7 +426,7 @@ nonisolated enum MeshtasticProtobuf {
 
             switch (field, wireType) {
             case (FieldNumbers.MyNodeInfo.myNodeNum, WireType.varint.rawValue):
-                result.myNodeNum = UInt32(try reader.readVarint())
+                result.myNodeNum = try reader.readUInt32Varint()
 
             default:
                 try reader.skipField(wireType: wireType)
@@ -448,7 +448,7 @@ nonisolated enum ProtobufError: Error {
 
 // MARK: - Protobuf Reader
 
-private struct ProtobufReader {
+nonisolated private struct ProtobufReader {
     private let data: Data
     private var offset: Int = 0
 
@@ -459,8 +459,9 @@ private struct ProtobufReader {
     }
 
     mutating func readTag() throws -> (field: UInt32, wireType: UInt8) {
-        let tagValue = try readVarint()
-        let field = UInt32(tagValue >> 3)
+        let tagValue = try readUInt32Varint()
+        guard tagValue >> 3 != 0 else { throw ProtobufError.invalidWireType }
+        let field = tagValue >> 3
         let wireType = UInt8(tagValue & 0x07)
         return (field, wireType)
     }
@@ -470,8 +471,9 @@ private struct ProtobufReader {
         var shift: UInt64 = 0
 
         while offset < data.count {
-            let byte = data[offset]
+            let byte = data[data.startIndex + offset]
             offset += 1
+            guard shift < 63 || byte <= 1 else { throw ProtobufError.malformedVarint }
             result |= UInt64(byte & 0x7F) << shift
 
             if byte & 0x80 == 0 {
@@ -485,6 +487,19 @@ private struct ProtobufReader {
         }
 
         throw ProtobufError.truncated
+    }
+
+    mutating func readUInt32Varint() throws -> UInt32 {
+        guard let value = UInt32(exactly: try readVarint()) else {
+            throw ProtobufError.malformedVarint
+        }
+        return value
+    }
+
+    mutating func readLength() throws -> Int {
+        let value = try readVarint()
+        guard value <= UInt64(data.count - offset) else { throw ProtobufError.truncated }
+        return Int(value)
     }
 
     mutating func readFixed32() throws -> UInt32 {
@@ -506,9 +521,10 @@ private struct ProtobufReader {
     }
 
     mutating func readBytes() throws -> Data {
-        let length = Int(try readVarint())
+        let length = try readLength()
         guard offset + length <= data.count else { throw ProtobufError.truncated }
-        let bytes = data[offset ..< offset + length]
+        let start = data.startIndex + offset
+        let bytes = data[start ..< start + length]
         offset += length
         return Data(bytes)
     }
@@ -529,7 +545,7 @@ private struct ProtobufReader {
             guard offset + 8 <= data.count else { throw ProtobufError.truncated }
             offset += 8
         case WireType.lengthDelimited.rawValue:
-            let length = Int(try readVarint())
+            let length = try readLength()
             guard offset + length <= data.count else { throw ProtobufError.truncated }
             offset += length
         case WireType.fixed32.rawValue:
@@ -544,7 +560,7 @@ private struct ProtobufReader {
 // MARK: - Data Extensions for Protobuf Writing
 
 extension Data {
-    fileprivate mutating func appendVarint(_ value: UInt64) {
+    nonisolated fileprivate mutating func appendVarint(_ value: UInt64) {
         var v = value
         while v > 0x7F {
             append(UInt8(v & 0x7F) | 0x80)
@@ -553,11 +569,11 @@ extension Data {
         append(UInt8(v))
     }
 
-    fileprivate mutating func appendTag(field: UInt32, wireType: WireType) {
+    nonisolated fileprivate mutating func appendTag(field: UInt32, wireType: WireType) {
         appendVarint(UInt64(field << 3 | UInt32(wireType.rawValue)))
     }
 
-    fileprivate mutating func appendFixed32(_ value: UInt32) {
+    nonisolated fileprivate mutating func appendFixed32(_ value: UInt32) {
         var le = value.littleEndian
         append(Data(bytes: &le, count: 4))
     }

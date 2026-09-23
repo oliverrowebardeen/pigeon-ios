@@ -142,7 +142,7 @@ final class MeshtasticBLEManager: NSObject {
 
     /// Sends a Pigeon compact envelope through the connected Meshtastic node.
     func sendPigeonPayload(_ payload: Data) -> Bool {
-        guard let peripheral = connectedPeripheral, let toRadio = toRadioChar, isConfigComplete else {
+        guard let peripheral = connectedPeripheral, toRadioChar != nil, isConfigComplete else {
             return false
         }
 

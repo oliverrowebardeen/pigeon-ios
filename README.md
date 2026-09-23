@@ -83,7 +83,7 @@ Every message is end-to-end encrypted before it leaves the sending device:
 - **Key derivation** — HKDF-SHA256 derives a 256-bit symmetric key from the shared secret.
 - **Encryption** — AES-256-GCM with a fresh random nonce per message. Provides authenticated encryption (confidentiality + integrity + authentication).
 - **Payload signatures** — Every `WirePayloadV2` body is Ed25519-signed by the sender before encryption. Relay, bridge phones, and recipients all reject unsigned payloads, and recipients pin the Ed25519 key to the X25519 identity on first contact so a later mismatch is treated as impersonation. See [docs/relay-and-bridge-protocol.md](docs/relay-and-bridge-protocol.md) for the canonical signed-bytes layout.
-- **Sealed sender** — Messages use ephemeral Curve25519 keys so the relay server only sees the recipient's routing hash, an unlinkable ephemeral public key, and opaque ciphertext. It cannot identify the sender or decrypt content. Bridge phones similarly forward encrypted frames they cannot read.
+- **Sealed sender** — Messages use ephemeral Curve25519 keys so the relay server only sees the recipient's routing hash, an ephemeral public key, and opaque ciphertext. The envelope omits the sender identity, but network addresses, timing, and message sizes can still correlate activity. It cannot decrypt message content. Bridge phones similarly forward encrypted frames they cannot read.
 - **Group encryption** — Groups use symmetric key encryption with epoch-based rotation. When members are added or removed, the group key rotates and is redistributed to active members.
 
 ## Building
@@ -159,8 +159,20 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 - File/image sharing
 - Voice messages
 
+## Validation and Security
+
+Run the unit and protocol tests on a simulator:
+
+```sh
+xcodebuild -project Pigeon.xcodeproj -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGN_IDENTITY=- test
+```
+
+Keep simulator code signing enabled so the test host can use Keychain. Bluetooth and LoRa operation still require physical devices. CI builds the app, runs tests, and scans Git history for exposed secrets. See [SECURITY.md](SECURITY.md) for reporting and the threat model.
+
 ## Known Limitations
 
+- **Security status**: Experimental software, without an independent cryptographic audit. Key pinning uses trust on first use. Sealed sender does not prevent traffic analysis or provide forward secrecy after recipient-key compromise. Local message history is stored in SwiftData under iOS platform protections, not separately encrypted by Pigeon.
+- **BLE reassembly**: At most 32 incomplete transfers per message/control channel, 256 chunks per transfer, and 480 bytes per chunk. Invalid or inconsistent chunks are discarded.
 - **BLE range**: ~50-100 meters between devices, depending on environment
 - **LoRa message size**: ~120 byte plaintext limit over Meshtastic (compact envelope overhead + LoRa payload cap). Short text messages only — no images or files via LoRa.
 - **Meshtastic gateway**: LoRa-to-relay bridging not yet implemented. Meshtastic messages stay on the LoRa mesh.
@@ -174,7 +186,7 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 
 ## Related
 
-- **[pigeon-relay](https://github.com/oliverrowebardeen/pigeon-relay)** — The encrypted relay server (Rust). Handles WebSocket transport, X25519 authentication, message queuing, and APNS push delivery. Zero-knowledge design — never decrypts messages.
+- **[pigeon-relay](https://github.com/oliverrowebardeen/pigeon-relay)** — The encrypted relay server (Rust). Handles WebSocket transport, X25519 authentication, message queuing, and APNS push delivery. Forwards client-encrypted messages without decrypting them.
 - **[pigeon-firmware](https://github.com/oliverrowebardeen/pigeon-firmware)** — ESP32 firmware for dedicated Pigeon mesh nodes. Custom LoRa protocol, BLE GATT server, WiFi bridge to relay. Meshtastic LoRa integration in progress.
 
 ## License
