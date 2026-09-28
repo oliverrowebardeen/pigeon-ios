@@ -20,7 +20,13 @@ nonisolated final class ReassemblyBuffer {
 
     @discardableResult
     func addChunk(index: UInt16, data: Data) -> Bool {
-        guard index < expectedChunkCount else { return false }
+        guard expectedChunkCount > 0, expectedChunkCount <= BLEConstants.maxReassemblyChunks,
+              index < expectedChunkCount, !isExpired,
+              let packet = try? MessageProtocol.decodePacket(data),
+              packet.header.messageID == messageID,
+              packet.header.chunkIndex == index,
+              packet.header.totalChunks == expectedChunkCount else { return false }
+        if let previous = chunks[index], previous != data { return false }
         chunks[index] = data
         return isComplete
     }

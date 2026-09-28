@@ -4,15 +4,25 @@ Pigeon is an encrypted mesh messenger for iOS. It sends text messages between iP
 
 ## Try It
 
-**[Download on TestFlight](https://testflight.apple.com)** — first 100 testers.
+**[TestFlight invitation](https://testflight.apple.com)** — availability depends on the current build and capacity. Source builds work without joining the beta.
+
+## Explore the project
+
+| Component | Purpose | Stack |
+| --- | --- | --- |
+| **This repository** | Mobile UI, identities, encrypted messages, and transport selection | Swift, SwiftUI, CoreBluetooth, CryptoKit, SwiftData |
+| [Relay](https://github.com/oliverrowebardeen/pigeon-relay) | Authenticated receive sessions and queued encrypted delivery | Rust, Tokio, Axum, WebSockets |
+| [Mesh node](https://github.com/oliverrowebardeen/pigeon-firmware) | Bridge phones to LoRa radios and optional WiFi | C++, ESP32-S3, PlatformIO |
+
+Start with the simulator test command below, then read the [engineering notes](docs/engineering-notes.md). This is an experimental project: automated checks verify source behavior, while Bluetooth/radio claims require a recorded device test.
 
 ## Features
 
 - **BLE mesh networking** — Messages hop across nearby iPhones using Bluetooth Low Energy. Multi-hop relay with TTL-based forwarding and deduplication.
 - **End-to-end encryption** — Curve25519 ECDH key agreement, AES-256-GCM authenticated encryption, HKDF-SHA256 key derivation. Keys generated on-device and stored in the iOS Keychain.
 - **Internet relay fallback** — When both devices have internet, messages route through an encrypted WebSocket relay with X25519 challenge-response authentication.
-- **Bridge mode** — A phone with internet access can relay messages for nearby offline phones, bridging BLE mesh to the internet relay transparently while preserving sealed-sender anonymity.
-- **Meshtastic LoRa support** — Long-range mesh messaging over LoRa radio. Connect directly to stock Meshtastic nodes via Meshtastic BLE, or use a Pigeon mesh node in Meshtastic mode for seamless interop. Compact binary wire format fits encrypted envelopes within LoRa payload limits. Uses Meshtastic portnum 256 — Pigeon traffic is invisible to other Meshtastic apps.
+- **Bridge mode** — A phone with internet access can relay messages for nearby offline phones, bridging BLE mesh to the internet relay transparently without adding the sender identity to the relay send protocol.
+- **Meshtastic LoRa support** — Long-range mesh messaging over LoRa radio. Connect directly to stock Meshtastic nodes via Meshtastic BLE, or use a Pigeon mesh node in Meshtastic mode for seamless interop. Compact binary wire format fits encrypted envelopes within LoRa payload limits. Uses Meshtastic portnum 256 — Other apps may observe radio traffic; Pigeon message content remains encrypted.
 - **Group messaging** — Symmetric key encryption with epoch-based key rotation on membership changes. Owner-controlled member management. Groups use single-broadcast envelopes over LoRa instead of per-member fan-out.
 - **Push notifications** — APNS integration through the relay server. The server sends push payloads without ever seeing message content.
 - **QR code identity sharing** — Share your Pigeon ID via QR code for easy peer discovery.
@@ -34,7 +44,7 @@ Pigeon is an encrypted mesh messenger for iOS. It sends text messages between iP
        │           ┌──────────────────────────┐            │
        └───WSS────►│  Relay Server            │◄───WSS────┘
                    │  (opaque — never sees    │
-                   │   plaintext or sender)   │
+                   │   message plaintext)   │
                    └──────────────────────────┘
 
                     Bridge Mode (hybrid)
@@ -60,12 +70,12 @@ Pigeon is an encrypted mesh messenger for iOS. It sends text messages between iP
 
 Pigeon automatically selects the best available transport:
 
-1. **BLE Direct** — Both phones are within Bluetooth range (~50-100m). Messages transfer directly over BLE.
+1. **BLE Direct** — Both phones are within Bluetooth range (range depends on the devices and surroundings). Messages transfer directly over BLE.
 2. **BLE Mesh** — Phones are out of direct range but other Pigeon devices are nearby. Messages hop through intermediate phones (up to 5 hops by default).
 3. **Internet Relay** — Both phones have internet. Messages route through the relay server via encrypted WebSocket. The server authenticates via X25519 challenge-response — no accounts, no passwords.
 4. **Bridge** — One phone has internet, the other doesn't. The internet-connected phone acts as a bridge, forwarding BLE messages to the relay server and vice versa. Selection uses hysteresis to prevent thrashing between candidates.
-5. **Pigeon Node (Meshtastic Mode)** — A Pigeon mesh node with `loraMode: "meshtastic"` bridges Pigeon BLE to Meshtastic LoRa. The phone sends compact binary envelopes over the Pigeon BLE protocol; the node relays them as Meshtastic packets. Interoperable with stock Meshtastic nodes on the same mesh.
-6. **Stock Meshtastic LoRa** — Connect directly to any stock Meshtastic node via Meshtastic BLE for long-range mesh messaging over LoRa radio. Messages use a compact binary envelope format (114 bytes overhead) instead of JSON to fit within LoRa payload limits (~230 bytes). The app uses Meshtastic portnum 256 (PRIVATE_APP) — non-Pigeon Meshtastic traffic is ignored.
+5. **Pigeon Node (Meshtastic Mode)** — A Pigeon mesh node with `loraMode: "meshtastic"` bridges Pigeon BLE to Meshtastic LoRa. The phone sends compact binary envelopes over the Pigeon BLE protocol; the node relays them as Meshtastic packets. Interoperable with compatible Meshtastic nodes on the same channel and radio settings; verify your hardware and firmware combination.
+6. **Stock Meshtastic LoRa** — Connect to a compatible stock Meshtastic node via Meshtastic BLE for long-range mesh messaging over LoRa radio. Messages use a compact binary envelope format (114 bytes overhead) instead of JSON to fit within LoRa payload limits (~230 bytes). The app uses Meshtastic portnum 256 (PRIVATE_APP) — non-Pigeon Meshtastic traffic is ignored.
 
 Transport switching is automatic and transparent. The app shows the current transport state in the UI.
 
@@ -83,7 +93,7 @@ Every message is end-to-end encrypted before it leaves the sending device:
 - **Key derivation** — HKDF-SHA256 derives a 256-bit symmetric key from the shared secret.
 - **Encryption** — AES-256-GCM with a fresh random nonce per message. Provides authenticated encryption (confidentiality + integrity + authentication).
 - **Payload signatures** — Every `WirePayloadV2` body is Ed25519-signed by the sender before encryption. Relay, bridge phones, and recipients all reject unsigned payloads, and recipients pin the Ed25519 key to the X25519 identity on first contact so a later mismatch is treated as impersonation. See [docs/relay-and-bridge-protocol.md](docs/relay-and-bridge-protocol.md) for the canonical signed-bytes layout.
-- **Sealed sender** — Messages use ephemeral Curve25519 keys so the relay server only sees the recipient's routing hash, an unlinkable ephemeral public key, and opaque ciphertext. It cannot identify the sender or decrypt content. Bridge phones similarly forward encrypted frames they cannot read.
+- **Sealed sender** — Messages use ephemeral Curve25519 keys so the relay server only sees the recipient's routing hash, an ephemeral public key, and opaque ciphertext. The envelope omits the sender identity, but network addresses, timing, and message sizes can still correlate activity. It cannot decrypt message content. Bridge phones similarly forward encrypted frames they cannot read.
 - **Group encryption** — Groups use symmetric key encryption with epoch-based rotation. When members are added or removed, the group key rotates and is redistributed to active members.
 
 ## Building
@@ -92,7 +102,7 @@ Every message is end-to-end encrypted before it leaves the sending device:
 
 - macOS with **Xcode 26.0+**
 - iOS 26.0+ deployment target
-- An Apple Developer account (free tier works for simulator builds)
+- No Apple Developer account is required for simulator builds; physical devices need signing setup.
 
 ### Clone and Build
 
@@ -113,10 +123,10 @@ Create `Pigeon.local.xcconfig` in the project root if you want relay features en
 ```xcconfig
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
 PIGEON_RELAY_ENABLED = YES
-PIGEON_RELAY_WEBSOCKET_URL = ws://127.0.0.1:8080/v1/ws
+PIGEON_RELAY_WEBSOCKET_URL = ws:/$()/127.0.0.1:8080/v1/ws
 ```
 
-Use a LAN or public `ws://` / `wss://` URL instead of `127.0.0.1` when testing on physical devices.
+The `$()` keeps `//` from becoming an xcconfig comment. This resolves to `ws://127.0.0.1:8080/v1/ws`. Use your relay machine’s LAN address for physical devices and `wss:/$()/your-host/v1/ws` for a TLS endpoint.
 
 ### Code Signing for Physical Devices
 
@@ -134,7 +144,7 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 
 ## Current Status
 
-### Built and Working
+### Implemented
 
 - BLE mesh messaging with multi-hop relay and deduplication
 - End-to-end encryption (Curve25519 + AES-256-GCM) with sealed sender
@@ -159,14 +169,26 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 - File/image sharing
 - Voice messages
 
+## Validation and Security
+
+Run the unit and protocol tests on a simulator:
+
+```sh
+xcodebuild -project Pigeon.xcodeproj -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGN_IDENTITY=- test
+```
+
+Keep simulator code signing enabled so the test host can use Keychain. Bluetooth and LoRa operation still require physical devices. CI builds the app, runs tests, and scans Git history for exposed secrets. See [SECURITY.md](SECURITY.md) for reporting and the threat model.
+
 ## Known Limitations
 
-- **BLE range**: ~50-100 meters between devices, depending on environment
+- **Security status**: Experimental software, without an independent cryptographic audit. Key pinning uses trust on first use. Sealed sender does not prevent traffic analysis or provide forward secrecy after recipient-key compromise. Local message history is stored in SwiftData under iOS platform protections, not separately encrypted by Pigeon.
+- **BLE reassembly**: At most 32 incomplete transfers per message/control channel, 256 chunks per transfer, and 480 bytes per chunk. Invalid or inconsistent chunks are discarded.
+- **BLE range**: Depends on the devices, surroundings, and iOS state; no range guarantee.
 - **LoRa message size**: ~120 byte plaintext limit over Meshtastic (compact envelope overhead + LoRa payload cap). Short text messages only — no images or files via LoRa.
 - **Meshtastic gateway**: LoRa-to-relay bridging not yet implemented. Meshtastic messages stay on the LoRa mesh.
 - **Meshtastic groups**: Group broadcast over LoRa uses a single envelope (efficient) but cannot be bridged to the relay server (relay is point-to-point only).
 - **iOS only**: No Android or desktop client yet
-- **BLE connections**: iOS allows ~7 simultaneous BLE connections
+- **BLE connections**: Capacity and background availability depend on the device and iOS.
 - **Message size**: BLE MTU limits chunks to 480 bytes with 22-byte headers
 - **Mesh TTL**: Default 5 hops. Messages held for relay expire after 1 hour.
 - **Simulator**: BLE features do not work on the iOS Simulator. Testing requires physical devices.
@@ -174,7 +196,7 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 
 ## Related
 
-- **[pigeon-relay](https://github.com/oliverrowebardeen/pigeon-relay)** — The encrypted relay server (Rust). Handles WebSocket transport, X25519 authentication, message queuing, and APNS push delivery. Zero-knowledge design — never decrypts messages.
+- **[pigeon-relay](https://github.com/oliverrowebardeen/pigeon-relay)** — The encrypted relay server (Rust). Handles WebSocket transport, X25519 authentication, message queuing, and APNS push delivery. Forwards client-encrypted messages without decrypting them.
 - **[pigeon-firmware](https://github.com/oliverrowebardeen/pigeon-firmware)** — ESP32 firmware for dedicated Pigeon mesh nodes. Custom LoRa protocol, BLE GATT server, WiFi bridge to relay. Meshtastic LoRa integration in progress.
 
 ## License

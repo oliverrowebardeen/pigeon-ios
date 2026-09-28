@@ -1,0 +1,8 @@
+title = "Pigeon secret scanning"
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Swift CryptoKit type names, not key values"
+regexTarget = "secret"
+regexes = ['^Curve25519\.(Signing|KeyAgreement)\.PrivateKey$']
