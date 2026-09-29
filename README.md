@@ -4,7 +4,7 @@ Pigeon is an encrypted mesh messenger for iOS. It sends text messages between iP
 
 ## Try It
 
-**[TestFlight invitation](https://testflight.apple.com)** — availability depends on the current build and capacity. Source builds work without joining the beta.
+**Pre-beta: no TestFlight build is currently available.** Developers can build from source using the instructions below. Testing Bluetooth messaging requires two physical iPhones; simulator tests do not demonstrate radio delivery.
 
 ## Explore the project
 

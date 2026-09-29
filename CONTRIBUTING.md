@@ -7,7 +7,7 @@ Thanks for your interest in contributing to Pigeon. This guide will help you get
 **Prerequisites:**
 
 - Xcode 26.0+
-- An Apple Developer account (a free account works for simulator builds)
+- No Apple Developer account is required for simulator builds. Physical devices need signing setup.
 
 **Setup:**
 
@@ -28,10 +28,10 @@ Relay and bridge features are disabled by default in source builds. If you want 
 
 ```xcconfig
 PIGEON_RELAY_ENABLED = YES
-PIGEON_RELAY_WEBSOCKET_URL = ws://127.0.0.1:8080/v1/ws
+PIGEON_RELAY_WEBSOCKET_URL = ws:/$()/127.0.0.1:8080/v1/ws
 ```
 
-Replace `YOUR_TEAM_ID` with your Apple Developer Team ID. Use a LAN or public `ws://` / `wss://` URL instead of `127.0.0.1` when testing on physical devices. This file is gitignored and will not be committed.
+Replace `YOUR_TEAM_ID` with your Apple Developer Team ID. The `$()` prevents `//` from starting an xcconfig comment. Use your relay machine's LAN address for physical devices, or `wss:/$()/your-host/v1/ws` for a TLS endpoint. This file is gitignored and will not be committed.
 
 ## Running on Simulator
 
