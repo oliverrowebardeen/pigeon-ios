@@ -205,4 +205,4 @@ Keep simulator code signing enabled so the test host can use Keychain; `CODE_SIG
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) for Pigeon software. See [third-party notices](THIRD_PARTY_NOTICES.md) for protocol references and the separately licensed code of conduct.
