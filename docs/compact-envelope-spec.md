@@ -32,7 +32,7 @@ Offset  Size  Field              Encoding
 
 ### Proposed gateway bridging (not implemented)
 
-The following describes routing metadata a future gateway would need. The current iOS relay receiver expects a JSON `MessageEnvelope`, so sending a compact envelope as `envelope_b64` is insufficient without a compatible conversion or receiver change:
+The following describes routing metadata a gateway would need. The current iOS relay receiver expects a JSON `MessageEnvelope`, so sending a compact envelope as `envelope_b64` is insufficient without a compatible conversion or receiver change:
 1. Read `messageID` at bytes 2-17 (UUID for relay `message_id` field)
 2. Read `recipientPublicKey` at bytes 54-85 (SHA-256 hash for relay `recipient_hash_hex`)
 3. Construct the 48-byte Pigeon routing header: `[messageID:16B][SHA256(recipientPublicKey):32B]`

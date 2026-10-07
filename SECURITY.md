@@ -4,7 +4,7 @@ Report potential vulnerabilities in the Pigeon iOS client through [GitHub privat
 
 If the reporting form is unavailable, open an issue asking the maintainer to enable private vulnerability reporting. Include no vulnerability details, exploit code, personal information, or credentials in that public request. Wait for a private channel before sending the report.
 
-Pigeon is pre-beta. Security fixes target the latest `main`; older commits and private builds do not have a separate support commitment.
+Security fixes target `main`; there are no supported releases. Reports are handled on a best-effort basis without a guaranteed response time.
 
 Only test devices and relay instances you own or are authorized to test. This is experimental software; the code review and automated tests are not an independent cryptographic audit.
 

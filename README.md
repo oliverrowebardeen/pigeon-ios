@@ -2,11 +2,11 @@
 
 > **Experimental, unaudited software.** Pigeon has not received an independent security audit. Do not rely on it to protect sensitive communications.
 
-Pigeon is an experimental encrypted messenger for iOS, with Bluetooth Low Energy mesh routing, an optional internet relay, and LoRa integration under development. Nearby phones can exchange and forward messages without internet. With a configured relay, an internet-connected phone can also bridge traffic for nearby phones. Intermediaries forward encrypted message content; connectivity, background operation, and delivery depend on the devices and network.
+Pigeon is an experimental encrypted messenger for iOS, with Bluetooth Low Energy mesh routing, an optional internet relay, and LoRa radio integration. Nearby phones can exchange and forward messages without internet. With a configured relay, an internet-connected phone can also bridge traffic for nearby phones. Intermediaries forward encrypted message content; connectivity, background operation, and delivery depend on the devices and network.
 
 ## Try It
 
-**Pre-beta: no TestFlight build is currently available.** Developers can build from source using the instructions below. Testing Bluetooth messaging requires two physical iPhones; simulator tests do not demonstrate radio delivery.
+Build from source using the instructions below. Testing Bluetooth messaging requires two physical iPhones; simulator tests do not demonstrate radio delivery.
 
 ## Explore the project
 
@@ -28,6 +28,9 @@ Start with the simulator test command below, then read the [engineering notes](d
 - **Group messaging** — Symmetric key encryption with epoch-based key rotation on membership changes. Owner-controlled member management. Groups use single-broadcast envelopes over LoRa instead of per-member fan-out.
 - **Push notifications** — APNS integration through the relay server. The server sends push payloads without ever seeing message content.
 - **QR code identity sharing** — Share your Pigeon ID via QR code for easy peer discovery.
+- **Contacts and trust** — Contact management with trust verification and key-change warnings.
+- **Reactions, replies, and read receipts** — Message reactions and replies, plus read receipts.
+- **Automatic transport switching** — BLE, then Pigeon mesh nodes, the internet relay, Pigeon nodes in Meshtastic mode, stock Meshtastic nodes, and finally flooding.
 - **Zero external dependencies** — Built entirely on Apple frameworks: CoreBluetooth, CryptoKit, SwiftData, SwiftUI. Manual protobuf codec for Meshtastic BLE — no generated code or external libraries.
 
 ## Architecture
@@ -148,34 +151,6 @@ BLE doesn't work on the iOS Simulator — you need physical iPhones. To build on
 
 You'll need **2+ iPhones** to test BLE mesh messaging.
 
-## Current Status
-
-### Implemented
-
-- BLE mesh messaging with multi-hop relay and deduplication
-- End-to-end encryption (Curve25519 + AES-256-GCM) with sealed sender
-- Internet relay transport with WebSocket and X25519 auth
-- Bridge mode (sealed-sender send tunnel + authenticated receive tunnel)
-- Experimental Meshtastic BLE integration and compact envelope codecs (signed-message size limitation below)
-- Group messaging with epoch-based key rotation
-- Push notifications via APNS
-- QR code identity sharing
-- Contact management with trust verification
-- Message reactions and replies
-- Read receipts
-- Automatic transport switching (BLE > Pigeon mesh > relay > Pigeon meshtastic > stock Meshtastic > flood)
-
-### Planned
-
-- Authenticated payloads that fit Meshtastic packets, or LoRa fragmentation
-- Meshtastic gateway bridging (LoRa-to-relay via firmware)
-- Connection priority state machine (auto-switch between Pigeon and Meshtastic nodes)
-- Android client
-- Satellite transport
-- Desktop client
-- File/image sharing
-- Voice messages
-
 ## Validation and Security
 
 Run the unit and protocol tests on a simulator:
@@ -192,9 +167,9 @@ Keep simulator code signing enabled so the test host can use Keychain; `CODE_SIG
 - **BLE reassembly**: At most 32 incomplete transfers per message/control channel, 256 chunks per transfer, and 480 bytes per chunk. Invalid or inconsistent chunks are discarded.
 - **BLE range**: Depends on the devices, surroundings, and iOS state; no range guarantee.
 - **Meshtastic message size**: The 230/233-byte packet limits include encryption and protocol overhead. Signed `WirePayloadV2` JSON exceeds that budget even for short text. The UI's text counter does not account for the full payload and is not a delivery guarantee. See the [compact envelope spec](docs/compact-envelope-spec.md).
-- **Meshtastic gateway**: LoRa-to-relay bridging not yet implemented. Meshtastic messages stay on the LoRa mesh.
+- **Meshtastic gateway**: LoRa-to-relay bridging is not implemented. Meshtastic messages stay on the LoRa mesh.
 - **Meshtastic groups**: Group broadcast over LoRa uses a single envelope (efficient) but cannot be bridged to the relay server (relay is point-to-point only).
-- **iOS only**: No Android or desktop client yet
+- **iOS only**: No Android or desktop client
 - **BLE connections**: Capacity and background availability depend on the device and iOS.
 - **Message size**: BLE MTU limits chunks to 480 bytes with 22-byte headers
 - **Mesh TTL**: Default 5 hops. Messages held for relay expire after 1 hour.
