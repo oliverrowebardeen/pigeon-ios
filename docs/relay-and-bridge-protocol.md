@@ -9,7 +9,7 @@ Pigeon uses two Curve25519 keypairs per device:
 - `identity.privateKey` / `identity.publicKey`: X25519 key agreement for envelope encryption and relay authentication.
 - `identity.signingPrivateKey` / `identity.signingPublicKey`: Ed25519 signatures for authenticated `WirePayloadV2` bodies.
 
-Every `WirePayloadV2` sent over BLE, relay, or a bridge must be signed. Unsigned payloads are rejected.
+Every `WirePayloadV2` sent over BLE, relay, or a bridge must be signed. Recipients reject unsigned payloads after decryption; intermediaries forward ciphertext and cannot inspect these signatures.
 
 ## Direct Envelope Format
 
@@ -37,7 +37,7 @@ For sealed sender, `senderPublicKey` is an ephemeral X25519 public key, not the 
 
 - `senderPublicKey`: the sender's long-term X25519 identity key.
 - `senderSigningPublicKey`: the sender's Ed25519 public key.
-- `signature`: Ed25519 signature over the payload with both signature fields cleared, except that `senderSigningPublicKey` is included in the signed bytes.
+- `signature`: Ed25519 signature over sorted-key JSON with only `signature` omitted. `senderSigningPublicKey` remains included; dates use milliseconds since the Unix epoch. `WirePayloadV2.serializedForSigning()` defines the bytes.
 
 Verification flow:
 

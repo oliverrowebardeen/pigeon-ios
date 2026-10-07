@@ -319,9 +319,9 @@ struct MeshNodeDetailSheet: View {
                 }
             } message: {
                 if pendingLoRaMode == "meshtastic" {
-                    Text("Switch to Meshtastic mode? The node will interoperate with Meshtastic mesh networks for extended range. WiFi bridge relay will be disabled and max message size is reduced to 233 bytes. The node will reboot.")
+                    Text("Switch to experimental Meshtastic mode? Signed chat messages currently exceed its packet limit. WiFi bridge relay will be disabled. The node will reboot.")
                 } else {
-                    Text("Switch to Native mode? Full Pigeon features will be restored \u{2014} WiFi bridge relay, message fragmentation (up to ~2KB), and faster data rate. The node will reboot.")
+                    Text("Switch to Native mode? The node will use Pigeon's native LoRa protocol and WiFi bridge. The node will reboot.")
                 }
             }
         }
@@ -371,9 +371,9 @@ struct MeshNodeDetailSheet: View {
 
     private var loraModeDescription: String {
         if liveNode.loraMode == "meshtastic" {
-            return "Interoperates with Meshtastic mesh networks for extended range. WiFi bridge relay disabled. Max message size: 233 bytes."
+            return "Experimental Meshtastic integration. Signed chat messages currently exceed the packet limit. WiFi bridge relay disabled."
         } else {
-            return "Full Pigeon features \u{2014} WiFi bridge relay, message fragmentation (up to ~2KB), faster data rate."
+            return "Pigeon's native LoRa protocol and WiFi bridge. Delivery depends on the connected firmware and radio settings."
         }
     }
 
