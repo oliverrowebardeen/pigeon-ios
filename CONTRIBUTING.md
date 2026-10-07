@@ -32,7 +32,7 @@ PIGEON_RELAY_ENABLED = YES
 PIGEON_RELAY_WEBSOCKET_URL = ws:/$()/127.0.0.1:8080/v1/ws
 ```
 
-Replace `YOUR_TEAM_ID` with your Apple Developer Team ID and choose a unique bundle identifier for your team. The app, test target, and profile URL type use this identifier. Push notifications also require matching relay APNS configuration. The `$()` prevents `//` from starting an xcconfig comment. Use your relay machine's LAN address for physical devices, or `wss:/$()/your-host/v1/ws` for a TLS endpoint. This file is gitignored and will not be committed.
+Replace `YOUR_TEAM_ID` with your Apple Developer Team ID and choose a unique bundle identifier for your team. The source-build default is `org.example.Pigeon`; the app, test target, and profile URL type derive from `PIGEON_BUNDLE_IDENTIFIER`. Push notifications require matching APNS credentials on your relay; set its `APNS_TOPIC` to your app's `PIGEON_BUNDLE_IDENTIFIER`. The `$()` prevents `//` from starting an xcconfig comment. Use your relay machine's LAN address for physical devices, or `wss:/$()/your-host/v1/ws` for a TLS endpoint. This file is gitignored and will not be committed.
 
 ## Running on Simulator
 

@@ -120,12 +120,13 @@ If the named simulator is unavailable for Xcode's latest runtime, list installed
 
 ### Local Relay / Bridge Configuration
 
-Internet relay and bridge features are opt-in in source builds. No relay endpoint is bundled.
+Internet relay and bridge features are opt-in in source builds. No relay endpoint is bundled. Configure a relay you run using the [pigeon-relay instructions](https://github.com/oliverrowebardeen/pigeon-relay) to enable them.
 
 Create `Pigeon.local.xcconfig` in the project root if you want relay features enabled locally:
 
 ```xcconfig
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
+PIGEON_BUNDLE_IDENTIFIER = com.example.yourname.Pigeon
 PIGEON_RELAY_ENABLED = YES
 PIGEON_RELAY_WEBSOCKET_URL = ws:/$()/127.0.0.1:8080/v1/ws
 ```
@@ -142,7 +143,7 @@ BLE doesn't work on the iOS Simulator — you need physical iPhones. To build on
    PIGEON_BUNDLE_IDENTIFIER = com.example.yourname.Pigeon
    ```
 2. Add `PIGEON_RELAY_ENABLED` / `PIGEON_RELAY_WEBSOCKET_URL` there too if you want relay or bridge mode during local testing.
-3. This file is gitignored. Find your Team ID in [Apple Developer > Membership](https://developer.apple.com/account) and choose a unique bundle identifier for your team. Push notifications require matching APNS credentials and bundle configuration on your relay.
+3. This file is gitignored. Find your Team ID in [Apple Developer > Membership](https://developer.apple.com/account) and choose a unique bundle identifier for your team. Push notifications require matching APNS credentials on your relay; set its `APNS_TOPIC` to your app's `PIGEON_BUNDLE_IDENTIFIER`.
 4. Build and run on your device from Xcode.
 
 You'll need **2+ iPhones** to test BLE mesh messaging.

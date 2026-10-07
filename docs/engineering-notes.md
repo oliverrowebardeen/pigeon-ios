@@ -24,4 +24,6 @@ Pigeon explores how a messaging client can use nearby phones, dedicated radio no
 
 The iOS CI builds the app with Swift warnings treated as errors, runs simulator unit and protocol tests, and scans Git history for secrets. Check the CI result for the specific commit being evaluated. Simulator tests need ad-hoc signing for Keychain access, but no paid developer membership. Each companion repository maintains its own build and test checks.
 
+For local verification, follow the [simulator build and test instructions](../CONTRIBUTING.md#running-on-simulator). For relay tests and firmware parser tests/builds, follow the instructions in [pigeon-relay](https://github.com/oliverrowebardeen/pigeon-relay) and [pigeon-firmware](https://github.com/oliverrowebardeen/pigeon-firmware), and check their CI results for the commits being tested.
+
 No independent cryptographic audit, radio-range benchmark, or fresh hardware interoperability run is implied. Use [the device validation checklist](device-validation.md) before publishing a demo or distributing a firmware build.
