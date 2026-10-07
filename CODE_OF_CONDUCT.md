@@ -22,7 +22,9 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Report unacceptable behavior privately to the project contact, **security@example.com**, with "Code of Conduct" in the subject. Include links and enough context to investigate; do not post personal information in public issues. The maintainer will review reports and may remove content, restrict participation, or take other action appropriate to the circumstances.
+For conduct concerns, open a repository issue asking the maintainer for a private contact channel. Do not include incident details or personal information in that public request; wait for a private channel before sharing them. Maintainers will review reports fairly and respect the reporter's privacy.
+
+For abusive content on GitHub, you can also use GitHub's [Report content or Report abuse options](https://docs.github.com/en/communities/maintaining-your-safety-on-github/reporting-abuse-or-spam) to contact GitHub Support. This route is handled by GitHub, separately from repository moderation.
 
 ## Attribution
 
