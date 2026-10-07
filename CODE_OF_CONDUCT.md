@@ -22,8 +22,8 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Instances of unacceptable behavior may be reported by contacting the project maintainer at github.com/oliverrowebardeen. All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances.
+Report unacceptable behavior privately to the project contact, **security@example.com**, with "Code of Conduct" in the subject. Include links and enough context to investigate; do not post personal information in public issues. The maintainer will review reports and may remove content, restrict participation, or take other action appropriate to the circumstances.
 
 ## Attribution
 
-This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.
+This Code of Conduct is adapted from the [Contributor Covenant, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The pledge, standards, and enforcement process have been shortened and adapted for this project.
