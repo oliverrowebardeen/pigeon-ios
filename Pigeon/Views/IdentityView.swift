@@ -159,7 +159,7 @@ struct IdentityView: View {
     }
 
     private var privacyNote: some View {
-        Text("Your identity is stored only on this device.\nNo account, no phone number, no tracking.")
+        Text("Your private keys are stored in this device's Keychain.\nNo account or phone number is required.")
             .font(PigeonTheme.captionFont)
             .foregroundColor(PigeonTheme.textTertiary)
             .multilineTextAlignment(.center)

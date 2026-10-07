@@ -10,4 +10,4 @@ Record app commit, relay commit, firmware commit, phone models/iOS versions, rad
 6. Node control: treat BLE provisioning as unauthenticated. Provision only in a trusted environment; secure unattended administration needs a separate pairing design and device validation.
 7. Demo: record a short continuous send/receive sequence with the active transport visible. State the observed setup; do not infer measured range or reliability from a successful short run.
 
-The separate local beacon experiment changes periodic traffic from 30-second to 10-second intervals and peer expiry from 90 to 30 seconds. Compare discovery latency, missed-beacon behavior, airtime, and power on hardware before making that the default.
+When changing beacon or peer-expiry intervals, compare discovery latency, missed-beacon behavior, airtime, and power against the recorded baseline on hardware.

@@ -1,6 +1,6 @@
 # Compact Envelope Wire Format
 
-Binary envelope format for Pigeon messages over LoRa. Used instead of JSON to fit encrypted payloads within Meshtastic's ~230-byte LoRa limit.
+Binary envelope format for Pigeon messages over LoRa. It replaces the outer JSON envelope, but does not shrink the encrypted `WirePayloadV2` JSON. Current signed message payloads exceed the single-packet LoRa budget; these codecs alone do not provide working chat delivery over Meshtastic.
 
 ## Meshtastic Transport
 
@@ -30,9 +30,9 @@ Offset  Size  Field              Encoding
 114     N     ciphertext         AES-256-GCM encrypted payload
 ```
 
-### Gateway bridging (firmware)
+### Proposed gateway bridging (not implemented)
 
-To bridge a direct envelope to the relay server, firmware must:
+The following describes routing metadata a future gateway would need. The current iOS relay receiver expects a JSON `MessageEnvelope`, so sending a compact envelope as `envelope_b64` is insufficient without a compatible conversion or receiver change:
 1. Read `messageID` at bytes 2-17 (UUID for relay `message_id` field)
 2. Read `recipientPublicKey` at bytes 54-85 (SHA-256 hash for relay `recipient_hash_hex`)
 3. Construct the 48-byte Pigeon routing header: `[messageID:16B][SHA256(recipientPublicKey):32B]`
@@ -69,7 +69,7 @@ Check byte 1 (flags):
 
 ## Encryption
 
-- **Direct:** Standard Pigeon ECDH — sender private key + recipient public key derive shared secret via X25519, HKDF-SHA256 key derivation, AES-256-GCM encryption.
+- **Direct:** Sealed sender uses an ephemeral sender private key and the recipient public key for X25519, HKDF-SHA256, and AES-256-GCM. The header's `senderPublicKey` is ephemeral; the signed payload contains the long-term sender identity.
 - **Group:** Group symmetric key (AES-256-GCM). Key identified by `groupID` + `epoch`. Epoch increments on membership changes.
 
 ## Size Budget
@@ -80,7 +80,7 @@ Check byte 1 (flags):
 | Max ciphertext | ~116 B | ~146 B |
 | **Total LoRa payload** | **~230 B** | **~230 B** |
 
-Plaintext is slightly smaller than ciphertext due to WirePayloadV2 JSON encoding before encryption.
+AES-GCM ciphertext has the same length as the encoded plaintext; the nonce and tag are already counted in the header. The plaintext here is the entire signed `WirePayloadV2` JSON, not just the text typed by the user. Two base64-encoded 32-byte public keys and a base64-encoded 64-byte signature alone take 176 bytes, before JSON field names or message content. That exceeds both budgets above. A smaller authenticated payload format or fragmentation is required. The dedicated Pigeon-node send path allows 233 bytes rather than 230; this does not resolve the payload-size limitation.
 
 ## Version History
 

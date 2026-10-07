@@ -1,10 +1,11 @@
 // Pigeon.xcconfig
 // Shared build configuration for the Pigeon project.
 //
-// To set your Apple Developer Team ID and relay endpoint for local testing:
+// To set your Apple Developer Team ID, bundle identifier, and relay endpoint for local testing:
 // 1. Create a file called Pigeon.local.xcconfig in this same directory
 // 2. Add lines like:
 //    DEVELOPMENT_TEAM = YOUR_TEAM_ID
+//    PIGEON_BUNDLE_IDENTIFIER = com.example.yourname.Pigeon
 //    PIGEON_RELAY_ENABLED = YES
 //    PIGEON_RELAY_WEBSOCKET_URL = ws:/$()/127.0.0.1:8080/v1/ws
 //
@@ -13,6 +14,8 @@
 // until you opt in with a local override.
 
 DEVELOPMENT_TEAM =
+// Neutral default; override locally with an identifier your team can sign.
+PIGEON_BUNDLE_IDENTIFIER = org.example.Pigeon
 PIGEON_RELAY_ENABLED = NO
 PIGEON_RELAY_WEBSOCKET_URL =
 

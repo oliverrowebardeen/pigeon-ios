@@ -22,8 +22,10 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Instances of unacceptable behavior may be reported by contacting the project maintainer at github.com/oliverrowebardeen. All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances.
+For conduct concerns, open a repository issue asking the maintainer for a private contact channel. Do not include incident details or personal information in that public request; wait for a private channel before sharing them. Maintainers will review reports fairly and respect the reporter's privacy.
+
+For abusive content on GitHub, you can also use GitHub's [Report content or Report abuse options](https://docs.github.com/en/communities/maintaining-your-safety-on-github/reporting-abuse-or-spam) to contact GitHub Support. This route is handled by GitHub, separately from repository moderation.
 
 ## Attribution
 
-This Code of Conduct is adapted from the [Contributor Covenant](https://www.contributor-covenant.org), version 2.1.
+This Code of Conduct is adapted from the [Contributor Covenant, version 2.1](https://www.contributor-covenant.org/version/2/1/code_of_conduct/), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The pledge, standards, and enforcement process have been shortened and adapted for this project.

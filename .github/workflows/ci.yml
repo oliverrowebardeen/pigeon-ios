@@ -18,12 +18,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Build
-        run: xcodebuild -project Pigeon.xcodeproj -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' SWIFT_TREAT_WARNINGS_AS_ERRORS=YES build
+        run: xcodebuild -project Pigeon.xcodeproj -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' SWIFT_TREAT_WARNINGS_AS_ERRORS=YES CODE_SIGNING_ALLOWED=NO build
 
       - name: Test
-        run: xcodebuild -project Pigeon.xcodeproj -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' SWIFT_TREAT_WARNINGS_AS_ERRORS=YES test
+        # Keychain tests require an ad-hoc-signed simulator host, not a developer account.
+        run: xcodebuild -project Pigeon.xcodeproj -scheme Pigeon -destination 'platform=iOS Simulator,name=iPhone 17 Pro' SWIFT_TREAT_WARNINGS_AS_ERRORS=YES CODE_SIGN_IDENTITY=- test
 
   secrets:
     runs-on: ubuntu-latest
@@ -32,6 +35,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Install Gitleaks with release checksum verification
         env:
           GITLEAKS_VERSION: 8.30.1

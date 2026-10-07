@@ -999,7 +999,7 @@ final class BLEManager: NSObject {
     // MARK: - Internal: Send pending messages to newly connected peer
 
     func sendPendingMessages(toPeerWithPublicKey peerPublicKey: Data, peripheralID: UUID) {
-        Task {
+        Task { [self] in
             let pending = await router.outboundMessages(for: peerPublicKey)
             let forwardable = await router.forwardableMessages()
 

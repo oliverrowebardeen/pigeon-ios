@@ -8,7 +8,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.example.Pigeon.profile</string>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER).profile</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>pigeon</string>
