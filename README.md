@@ -1,6 +1,8 @@
 # Pigeon
 
-Pigeon is an experimental encrypted messenger for iOS, with Bluetooth Low Energy mesh routing, an optional internet relay, and LoRa integration under development. Nearby phones can exchange and forward messages without internet. With a configured relay, an internet-connected phone can also bridge traffic for nearby phones. Intermediaries forward encrypted message content; connectivity, background operation, and delivery depend on the devices and network. Pigeon has not received an independent security audit.
+> **Experimental, unaudited software.** Pigeon has not received an independent security audit. Do not rely on it to protect sensitive communications.
+
+Pigeon is an experimental encrypted messenger for iOS, with Bluetooth Low Energy mesh routing, an optional internet relay, and LoRa integration under development. Nearby phones can exchange and forward messages without internet. With a configured relay, an internet-connected phone can also bridge traffic for nearby phones. Intermediaries forward encrypted message content; connectivity, background operation, and delivery depend on the devices and network.
 
 ## Try It
 
@@ -152,7 +154,7 @@ You'll need **2+ iPhones** to test BLE mesh messaging.
 - BLE mesh messaging with multi-hop relay and deduplication
 - End-to-end encryption (Curve25519 + AES-256-GCM) with sealed sender
 - Internet relay transport with WebSocket and X25519 auth
-- Bridge mode (anonymous send tunnel + authenticated receive tunnel)
+- Bridge mode (sealed-sender send tunnel + authenticated receive tunnel)
 - Experimental Meshtastic BLE integration and compact envelope codecs (signed-message size limitation below)
 - Group messaging with epoch-based key rotation
 - Push notifications via APNS
