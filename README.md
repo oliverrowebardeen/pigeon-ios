@@ -135,9 +135,10 @@ BLE doesn't work on the iOS Simulator — you need physical iPhones. To build on
 1. Create `Pigeon.local.xcconfig` in the project root:
    ```xcconfig
    DEVELOPMENT_TEAM = YOUR_TEAM_ID
+   PIGEON_BUNDLE_IDENTIFIER = com.example.yourname.Pigeon
    ```
 2. Add `PIGEON_RELAY_ENABLED` / `PIGEON_RELAY_WEBSOCKET_URL` there too if you want relay or bridge mode during local testing.
-3. This file is gitignored. Find your Team ID in [Apple Developer > Membership](https://developer.apple.com/account).
+3. This file is gitignored. Find your Team ID in [Apple Developer > Membership](https://developer.apple.com/account) and choose a unique bundle identifier for your team. Push notifications require matching APNS credentials and bundle configuration on your relay.
 4. Build and run on your device from Xcode.
 
 You'll need **2+ iPhones** to test BLE mesh messaging.
@@ -192,7 +193,7 @@ Keep simulator code signing enabled so the test host can use Keychain. Bluetooth
 - **Message size**: BLE MTU limits chunks to 480 bytes with 22-byte headers
 - **Mesh TTL**: Default 5 hops. Messages held for relay expire after 1 hour.
 - **Simulator**: BLE features do not work on the iOS Simulator. Testing requires physical devices.
-- **Bundle ID**: Currently `com.example.Pigeon` — will be updated before App Store release.
+- **Bundle ID**: Source builds default to `org.example.Pigeon`. Set `PIGEON_BUNDLE_IDENTIFIER` in `Pigeon.local.xcconfig` for device signing. Changing the identifier creates a separate app installation and does not migrate an existing installation's identity or messages.
 
 ## Related
 

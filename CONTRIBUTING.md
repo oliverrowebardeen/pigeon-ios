@@ -22,6 +22,7 @@ To build and run on a physical device, create a file called `Pigeon.local.xcconf
 
 ```xcconfig
 DEVELOPMENT_TEAM = YOUR_TEAM_ID
+PIGEON_BUNDLE_IDENTIFIER = com.example.yourname.Pigeon
 ```
 
 Relay and bridge features are disabled by default in source builds. If you want them for local development, add:
@@ -31,7 +32,7 @@ PIGEON_RELAY_ENABLED = YES
 PIGEON_RELAY_WEBSOCKET_URL = ws:/$()/127.0.0.1:8080/v1/ws
 ```
 
-Replace `YOUR_TEAM_ID` with your Apple Developer Team ID. The `$()` prevents `//` from starting an xcconfig comment. Use your relay machine's LAN address for physical devices, or `wss:/$()/your-host/v1/ws` for a TLS endpoint. This file is gitignored and will not be committed.
+Replace `YOUR_TEAM_ID` with your Apple Developer Team ID and choose a unique bundle identifier for your team. The app, test target, and profile URL type use this identifier. Push notifications also require matching relay APNS configuration. The `$()` prevents `//` from starting an xcconfig comment. Use your relay machine's LAN address for physical devices, or `wss:/$()/your-host/v1/ws` for a TLS endpoint. This file is gitignored and will not be committed.
 
 ## Running on Simulator
 

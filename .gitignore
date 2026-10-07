@@ -16,9 +16,22 @@ build/
 *.ipa
 *.dSYM/
 *.dSYM.zip
+*.xcarchive/
+*.xcresult/
+
+# Local signing material and credentials
+*.p8
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+*.mobileprovision
+*.provisionprofile
 
 # Swift Package Manager
 .swiftpm/
+.build/
 
 # Environment files
 .env*
